@@ -16,7 +16,7 @@
 [CmdletBinding()]
 param(
     [string]$Tag,
-    [string]$Repository = 'xStoikk/TrickyStoreOSS',
+    [string]$Repository = 'xStoikk/TrickyStoreOSS'
 )
 
 $ErrorActionPreference = 'Stop'
