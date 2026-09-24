@@ -12,6 +12,7 @@ import android.os.ServiceManager
 import android.os.ServiceSpecificException
 import android.security.KeyStore
 import android.security.keystore.KeystoreResponse
+import io.github.beakthoven.TrickyStoreOSS.logging.DiagLog
 import io.github.beakthoven.TrickyStoreOSS.logging.Logger
 import kotlin.system.exitProcess
 
@@ -28,6 +29,7 @@ abstract class BaseKeystoreInterceptor : BinderInterceptor() {
 
     fun tryRunKeystoreInterceptor(): Boolean {
         Logger.i("Trying to register ${this::class.simpleName} (attempt $triedCount)...")
+        DiagLog.interceptorAttempt(this::class.simpleName ?: "unknown", triedCount, injected)
 
         val service = getService() ?: return false
         val backdoor = getBinderBackdoor(service)
@@ -75,7 +77,9 @@ abstract class BaseKeystoreInterceptor : BinderInterceptor() {
 
         val process = Runtime.getRuntime().exec(command)
 
-        if (process.waitFor() != 0) {
+        val success = process.waitFor() == 0
+        DiagLog.interceptorInjectResult(this::class.simpleName ?: "unknown", success, triedCount)
+        if (!success) {
             Logger.e("Injection failed! Daemon will exit")
             exitProcess(1)
         }

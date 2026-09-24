@@ -32,6 +32,7 @@ import io.github.beakthoven.TrickyStoreOSS.interceptors.InterceptorUtils.errorRe
 import io.github.beakthoven.TrickyStoreOSS.interceptors.InterceptorUtils.getTransactCode
 import io.github.beakthoven.TrickyStoreOSS.interceptors.InterceptorUtils.hasException
 import io.github.beakthoven.TrickyStoreOSS.interceptors.InterceptorUtils.typedReply
+import io.github.beakthoven.TrickyStoreOSS.logging.DiagLog
 import io.github.beakthoven.TrickyStoreOSS.logging.Logger
 import io.github.beakthoven.TrickyStoreOSS.putCertificateChain
 import java.security.KeyPair
@@ -54,6 +55,8 @@ class SecurityLevelInterceptor(private val original: IKeystoreSecurityLevel, pri
     // pad forged replies to the measured real latency (EMA of forwarded generateKey calls)
     @Volatile private var realKeygenEmaMs: Double? = null
     private val pendingKeygenStarts = ConcurrentHashMap<String, Long>()
+    private val pendingDeviceIdForwards = ConcurrentHashMap<Key, Boolean>()
+    private val pendingPassthroughKeys = ConcurrentHashMap<Key, Boolean>()
 
     companion object {
         private const val DEFAULT_KEYGEN_MS = 3.0
@@ -73,6 +76,15 @@ class SecurityLevelInterceptor(private val original: IKeystoreSecurityLevel, pri
         @Keep val keysByNspace = ConcurrentHashMap<Long, Key>()
 
         @Keep val patchedResponses = ConcurrentHashMap<Key, KeyEntryResponse>()
+
+        @Keep fun isPassthroughKey(key: Key): Boolean =
+            PassthroughKeyRegistry.isTracked(PassthroughKeyRegistry.KeyId(key.uid, key.alias))
+
+        @Keep
+        fun isPassthroughDescriptor(uid: Int, descriptor: KeyDescriptor): Boolean {
+            if (PassthroughKeyRegistry.isTracked(uid, descriptor)) return true
+            return resolveOwnerKeys(uid, descriptor).any { isPassthroughKey(it) }
+        }
 
         @Keep fun getKeyPairs(uid: Int, alias: String): Pair<KeyPair, List<Certificate>>? = keyPairs[Key(uid, alias)]
 
@@ -143,6 +155,8 @@ class SecurityLevelInterceptor(private val original: IKeystoreSecurityLevel, pri
             keyPairs.remove(k)
             skipLeafHacks.remove(k)
             patchedResponses.remove(k)
+            PassthroughKeyRegistry.remove(uid, alias)
+            DiagLog.passthroughTrack("remove", uid, PassthroughKeyRegistry.aliasHash(alias))
             usageRemaining.remove(k)
             grants.values.removeIf { it.key == k }
             CertificateHack.leafAlgorithms.remove(CertificateHack.KeyIdentifier(alias, uid))
@@ -154,6 +168,7 @@ class SecurityLevelInterceptor(private val original: IKeystoreSecurityLevel, pri
             keys.clear()
             keyPairs.clear()
             skipLeafHacks.clear()
+            PassthroughKeyRegistry.clear()
             patchedResponses.clear()
             keysByNspace.clear()
             usageRemaining.clear()
@@ -227,11 +242,17 @@ class SecurityLevelInterceptor(private val original: IKeystoreSecurityLevel, pri
                         "Caller lacks READ_PRIVILEGED_PHONE_STATE",
                     )
                 }
+                val needGenerate = PkgConfig.needGenerate(callingUid)
+                val hasAttestKeyPurpose = kgp.purpose.contains(KeyPurpose.ATTEST_KEY)
+                val attestationKeyDescriptorSet = attestationKeyDescriptor != null
+                val hasAttestationChallenge = challenge != null
                 val forceForge =
-                    PkgConfig.needGenerate(callingUid) ||
-                        hasDeviceIdAttestation ||
-                        kgp.purpose.contains(KeyPurpose.ATTEST_KEY) ||
-                        attestationKeyDescriptor != null
+                    GenerateKeyRoute.computeForceForge(
+                        needGenerate = needGenerate,
+                        hasDeviceIdAttestation = hasDeviceIdAttestation,
+                        hasAttestKeyPurpose = hasAttestKeyPurpose,
+                        attestationKeyDescriptorSet = attestationKeyDescriptorSet,
+                    )
                 when {
                     forceForge -> {
                         val isSymmetric = kgp.algorithm == Algorithm.AES || kgp.algorithm == Algorithm.HMAC
@@ -244,13 +265,24 @@ class SecurityLevelInterceptor(private val original: IKeystoreSecurityLevel, pri
                             Logger.d(
                                 "generateKey: forwarding symmetric key uid=$callingUid alias=${keyDescriptor.alias}"
                             )
+                            logGenerateKeyRoute(
+                                callingUid,
+                                keyDescriptor.alias,
+                                needGenerate,
+                                hasDeviceIdAttestation,
+                                hasAttestKeyPurpose,
+                                attestationKeyDescriptorSet,
+                                hasAttestationChallenge,
+                                forceForge,
+                                "forward-symmetric",
+                            )
                             return forwardKeygen(keyDescriptor.alias, startNanos)
                         }
                         val needsForgedAttestation =
-                            challenge != null ||
+                            hasAttestationChallenge ||
                                 hasDeviceIdAttestation ||
-                                kgp.purpose.contains(KeyPurpose.ATTEST_KEY) ||
-                                attestationKeyDescriptor != null
+                                hasAttestKeyPurpose ||
+                                attestationKeyDescriptorSet
                         if (!needsForgedAttestation) {
                             // Plain asymmetric keys without any attestation request are
                             // only used for local crypto (e.g. RSA wrapping of stored
@@ -261,8 +293,32 @@ class SecurityLevelInterceptor(private val original: IKeystoreSecurityLevel, pri
                             Logger.d(
                                 "generateKey: forwarding plain asymmetric key uid=$callingUid alias=${keyDescriptor.alias}"
                             )
+                            logGenerateKeyRoute(
+                                callingUid,
+                                keyDescriptor.alias,
+                                needGenerate,
+                                hasDeviceIdAttestation,
+                                hasAttestKeyPurpose,
+                                attestationKeyDescriptorSet,
+                                hasAttestationChallenge,
+                                forceForge,
+                                "forward-plain-asymmetric",
+                            )
                             return forwardKeygen(keyDescriptor.alias, startNanos)
                         }
+                        val needHackForGenerate = PkgConfig.needHack(callingUid)
+                        logGenerateKeyRoute(
+                            callingUid,
+                            keyDescriptor.alias,
+                            needGenerate,
+                            hasDeviceIdAttestation,
+                            hasAttestKeyPurpose,
+                            attestationKeyDescriptorSet,
+                            hasAttestationChallenge,
+                            forceForge,
+                            "generate",
+                            needHack = needHackForGenerate,
+                        )
                         val pair =
                             CertificateGen.generateKeyPair(
                                 callingUid,
@@ -278,14 +334,57 @@ class SecurityLevelInterceptor(private val original: IKeystoreSecurityLevel, pri
                             pair.first,
                             null,
                             pair.second,
-                            PkgConfig.needHack(callingUid),
+                            needHackForGenerate,
                             startNanos,
                         )
                     }
                     PkgConfig.needHack(callingUid) -> {
-                        skipLeafHacks.remove(Key(callingUid, keyDescriptor.alias))
-                        Logger.d(
-                            "generateKey: forwarding non-attestation key uid=$callingUid alias=${keyDescriptor.alias}"
+                        val selectedRoute =
+                            GenerateKeyRoute.selectTopLevelRoute(
+                                forceForge = forceForge,
+                                needHack = true,
+                                explicitLeafHack = PkgConfig.isExplicitLeafHack(callingUid),
+                                hasAttestationChallenge = hasAttestationChallenge,
+                                needGenerate = needGenerate,
+                            )
+                        val routeKey = Key(callingUid, keyDescriptor.alias)
+                        if (GenerateKeyRoute.isPassthroughRoute(selectedRoute)) {
+                            pendingPassthroughKeys[routeKey] = true
+                            patchedResponses.remove(routeKey)
+                            DiagLog.passthroughTrack(
+                                "add",
+                                callingUid,
+                                PassthroughKeyRegistry.aliasHash(keyDescriptor.alias),
+                            )
+                            DiagLog.certPath(action = "passthrough", reason = "real_tee")
+                            Logger.d(
+                                "generateKey: passthrough-real-tee uid=$callingUid alias=${keyDescriptor.alias}"
+                            )
+                        } else {
+                            skipLeafHacks.remove(routeKey)
+                            Logger.d(
+                                "generateKey: forwarding non-attestation key uid=$callingUid alias=${keyDescriptor.alias}"
+                            )
+                        }
+                        if (hasDeviceIdAttestation) {
+                            pendingDeviceIdForwards[routeKey] = true
+                            DiagLog.deviceIdRoute(
+                                callingUid,
+                                PkgConfig.diagnosticCachedPackagesForUid(callingUid),
+                                selectedRoute,
+                            )
+                        }
+                        logGenerateKeyRoute(
+                            callingUid,
+                            keyDescriptor.alias,
+                            needGenerate,
+                            hasDeviceIdAttestation,
+                            hasAttestKeyPurpose,
+                            attestationKeyDescriptorSet,
+                            hasAttestationChallenge,
+                            forceForge,
+                            selectedRoute,
+                            needHack = true,
                         )
                         return forwardKeygen(keyDescriptor.alias, startNanos)
                     }
@@ -353,11 +452,66 @@ class SecurityLevelInterceptor(private val original: IKeystoreSecurityLevel, pri
         reply: Parcel?,
         resultCode: Int,
     ): Result {
-        if (code == generateKeyTransaction && reply != null && !reply.hasException()) {
+        if (code == generateKeyTransaction && reply != null) {
             val raw = runCatching {
                 data.enforceInterface(IKeystoreSecurityLevel.DESCRIPTOR)
                 val keyDescriptor = data.readTypedObject(KeyDescriptor.CREATOR) ?: return@runCatching null
+                val routeKey = Key(callingUid, keyDescriptor.alias)
+                val trackDeviceId = pendingDeviceIdForwards.remove(routeKey) == true
+                val isPassthrough = pendingPassthroughKeys.remove(routeKey) == true
+                val replyStart = reply.dataPosition()
+                try {
+                    reply.readException()
+                } catch (e: Exception) {
+                    if (trackDeviceId) {
+                        DiagLog.deviceIdRealTeeResult(
+                            callingUid,
+                            success = false,
+                            errorCode = extractBinderErrorCode(e),
+                            exceptionClass = e.javaClass.name,
+                        )
+                    }
+                    if (isPassthrough) {
+                        DiagLog.passthroughResult(callingUid, success = false, replyUnchanged = true)
+                    }
+                    return@runCatching null
+                }
+                reply.setDataPosition(replyStart)
+                if (isPassthrough) {
+                    if (trackDeviceId) {
+                        DiagLog.deviceIdRealTeeResult(
+                            callingUid,
+                            success = true,
+                            errorCode = null,
+                            exceptionClass = null,
+                        )
+                    }
+                    reply.readException()
+                    val metadata = reply.readTypedObject(KeyMetadata.CREATOR)
+                    metadata?.key?.nspace?.let { nspace ->
+                        if (nspace != 0L) keysByNspace[nspace] = routeKey
+                    }
+                    PassthroughKeyRegistry.promote(callingUid, keyDescriptor.alias, metadata?.key?.nspace)
+                    DiagLog.passthroughTrack(
+                        "promote",
+                        callingUid,
+                        PassthroughKeyRegistry.aliasHash(keyDescriptor.alias),
+                    )
+                    recordRealKeygen(keyDescriptor.alias)
+                    DiagLog.passthroughResult(callingUid, success = true, replyUnchanged = true)
+                    reply.setDataPosition(replyStart)
+                    return@runCatching null
+                }
+                if (trackDeviceId) {
+                    DiagLog.deviceIdRealTeeResult(
+                        callingUid,
+                        success = true,
+                        errorCode = null,
+                        exceptionClass = null,
+                    )
+                }
                 recordRealKeygen(keyDescriptor.alias)
+                reply.readException()
                 val metadata = reply.readTypedObject(KeyMetadata.CREATOR) ?: return@runCatching null
                 val chain =
                     with(CertificateUtils) {
@@ -584,5 +738,60 @@ class SecurityLevelInterceptor(private val original: IKeystoreSecurityLevel, pri
             }
         }
         return raw.getOrNull()
+    }
+
+    private fun extractBinderErrorCode(exception: Throwable): Int? {
+        var current: Throwable? = exception
+        var depth = 0
+        while (current != null && depth < 8) {
+            if (current is android.os.ServiceSpecificException) return current.errorCode
+            val fields = listOf("errorCode", "error", "status", "code", "kmError", "keymasterError", "responseCode")
+            for (fieldName in fields) {
+                val code =
+                    runCatching {
+                        val field = current!!.javaClass.getField(fieldName)
+                        field.getInt(current)
+                    }.getOrNull()
+                if (code != null) return code
+            }
+            current = current.cause
+            depth++
+        }
+        return null
+    }
+
+    private fun logGenerateKeyRoute(
+        callingUid: Int,
+        alias: String?,
+        needGenerate: Boolean,
+        hasDeviceIdAttestation: Boolean,
+        hasAttestKeyPurpose: Boolean,
+        attestationKeyDescriptorSet: Boolean,
+        hasAttestationChallenge: Boolean,
+        forceForge: Boolean,
+        selected: String,
+        needHack: Boolean = false,
+    ) {
+        val packages = PkgConfig.diagnosticCachedPackagesForUid(callingUid)
+        val interesting =
+            needHack ||
+                needGenerate ||
+                packages?.any { pkg ->
+                    pkg.contains("gms") || pkg.contains("vending") || pkg.contains("google")
+                } == true
+        if (!interesting) return
+        DiagLog.modeRouting(
+            callingUid = callingUid,
+            packages = packages,
+            alias = alias,
+            needHack = needHack,
+            needGenerate = needGenerate,
+            hasDeviceIdAttestation = hasDeviceIdAttestation,
+            hasAttestKeyPurpose = hasAttestKeyPurpose,
+            attestationKeyDescriptorSet = attestationKeyDescriptorSet,
+            hasAttestationChallenge = hasAttestationChallenge,
+            forceForge = forceForge,
+            selected = selected,
+        )
     }
 }

@@ -5,6 +5,8 @@
 
 import com.android.build.api.variant.ApplicationVariant
 
+import java.nio.charset.StandardCharsets
+
 plugins { alias(libs.plugins.android.application) }
 
 val gitCommitCount =
@@ -29,7 +31,7 @@ val gitCommitHash =
         .map { it.trim() }
         .get()
 
-val verName = "v3.1.0"
+val verName = "v3.1.6-auto-tee-passthrough"
 
 android {
     namespace = "io.github.beakthoven.TrickyStoreOSS"
@@ -80,6 +82,9 @@ android {
     }
     buildFeatures { prefab = true }
     packaging { resources { pickFirsts += setOf("META-INF/LICENSE.md", "META-INF/NOTICE.md", "META-INF/INDEX.LIST") } }
+    testOptions {
+        unitTests.isIncludeAndroidResources = false
+    }
 }
 
 dependencies {
@@ -87,6 +92,7 @@ dependencies {
     compileOnly(libs.annotation)
     implementation(libs.org.bouncycastle.bcpkix.jdk18on)
     implementation(libs.org.lsposed.libcxx.libcxx)
+    testImplementation("junit:junit:4.13.2")
 }
 
 androidComponents {
@@ -164,6 +170,17 @@ androidComponents {
                         val destFile = tempDir.resolve(relativePath)
                         destFile.parentFile.mkdirs()
                         sourceFile.copyTo(destFile, overwrite = true)
+                        val normalizedPath = destFile.path.replace('\\', '/')
+                        val isShellScript =
+                            destFile.extension == "sh" ||
+                                destFile.name == "daemon" ||
+                                normalizedPath.endsWith("META-INF/com/google/android/update-binary") ||
+                                normalizedPath.endsWith("META-INF/com/google/android/updater-script")
+                        if (isShellScript) {
+                            val text = destFile.readText(StandardCharsets.UTF_8)
+                            val normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+                            if (text != normalized) destFile.writeText(normalized, StandardCharsets.UTF_8)
+                        }
                     }
 
                 // Process module.prop

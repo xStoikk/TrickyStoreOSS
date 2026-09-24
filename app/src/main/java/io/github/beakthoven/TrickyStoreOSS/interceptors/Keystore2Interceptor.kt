@@ -24,6 +24,7 @@ import io.github.beakthoven.TrickyStoreOSS.interceptors.InterceptorUtils.getTran
 import io.github.beakthoven.TrickyStoreOSS.interceptors.InterceptorUtils.hasException
 import io.github.beakthoven.TrickyStoreOSS.interceptors.InterceptorUtils.successReply
 import io.github.beakthoven.TrickyStoreOSS.interceptors.InterceptorUtils.typedReply
+import io.github.beakthoven.TrickyStoreOSS.logging.DiagLog
 import io.github.beakthoven.TrickyStoreOSS.logging.Logger
 import io.github.beakthoven.TrickyStoreOSS.putCertificateChain
 
@@ -95,6 +96,7 @@ object Keystore2Interceptor : BaseKeystoreInterceptor() {
         } else {
             Logger.i("No StrongBox SecurityLevel found")
         }
+        DiagLog.interceptorRegistered("Keystore2Interceptor", tee != null, strongBox != null)
     }
 
     override fun onPreTransact(
@@ -294,6 +296,10 @@ object Keystore2Interceptor : BaseKeystoreInterceptor() {
                         }
                     }
                     PkgConfig.needHack(callingUid) -> {
+                        if (SecurityLevelInterceptor.isPassthroughDescriptor(callingUid, descriptor)) {
+                            Logger.d("getKeyEntry: passthrough bypass pre uid=$callingUid alias=$aliasLabel")
+                            Continue
+                        }
                         if (SecurityLevelInterceptor.shouldSkipLeafHackFor(callingUid, descriptor)) {
                             Logger.i("skip leaf hack for uid=$callingUid alias=$aliasLabel")
                             val response = SecurityLevelInterceptor.findGeneratedKey(callingUid, descriptor)?.response
@@ -341,6 +347,13 @@ object Keystore2Interceptor : BaseKeystoreInterceptor() {
             return Continue
         }
         return Skip
+    }
+
+    private fun logPassthroughGetKeyEntryHit(uid: Int, descriptor: KeyDescriptor) {
+        val alias =
+            descriptor.alias ?: SecurityLevelInterceptor.findAliasForNspace(uid, descriptor.nspace)
+        DiagLog.passthroughTrack("hit", uid, PassthroughKeyRegistry.aliasHash(alias))
+        DiagLog.certPath(action = "passthrough-getKeyEntry", reason = "real_tee")
     }
 
     private fun safeTypedObjectReply(response: KeyEntryResponse, label: String): Result {
@@ -472,25 +485,45 @@ object Keystore2Interceptor : BaseKeystoreInterceptor() {
         if (code == getKeyEntryTransaction) {
             try {
                 data.enforceInterface("android.system.keystore2.IKeystoreService")
-                val response = reply.readTypedObject(KeyEntryResponse.CREATOR)
-                if (response != null) {
-                    val cachedKey =
-                        response.metadata
-                            ?.key
-                            ?.nspace
-                            ?.takeIf { it != 0L }
-                            ?.let { SecurityLevelInterceptor.keysByNspace[it] }
-                    val cached = cachedKey?.let { SecurityLevelInterceptor.patchedResponses[it] }
-                    if (cached != null) return createTypedObjectReply(cached)
-                    val chain = CertificateUtils.run { response.getCertificateChain() }
-                    if (chain != null) {
-                        val newChain = CertificateHack.hackCertificateChain(chain, callingUid)
-                        response.putCertificateChain(newChain).getOrThrow()
-                        response.metadata?.authorizations =
-                            CertificateHack.patchAuthorizations(response.metadata?.authorizations, callingUid)
-                        if (cachedKey != null) SecurityLevelInterceptor.patchedResponses[cachedKey] = response
-                        Logger.d("Hacked certificate for uid=$callingUid")
-                        return createTypedObjectReply(response)
+                val descriptor = data.readTypedObject(KeyDescriptor.CREATOR)
+                val isPassthrough =
+                    descriptor != null && SecurityLevelInterceptor.isPassthroughDescriptor(callingUid, descriptor)
+                val cachedKey =
+                    descriptor?.let { SecurityLevelInterceptor.resolveKey(callingUid, it) }
+                val hasCachedPatch = cachedKey?.let { SecurityLevelInterceptor.patchedResponses[it] != null } == true
+                when (GetKeyEntryPostPolicy.decide(isPassthrough, hasCachedPatch)) {
+                    GetKeyEntryPostPolicy.Action.PASSTHROUGH_UNMODIFIED -> {
+                        logPassthroughGetKeyEntryHit(callingUid, descriptor!!)
+                        return Skip
+                    }
+                    GetKeyEntryPostPolicy.Action.SERVE_CACHED_PATCH -> {
+                        return createTypedObjectReply(SecurityLevelInterceptor.patchedResponses[cachedKey!!]!!)
+                    }
+                    GetKeyEntryPostPolicy.Action.PATCH_LEAF -> {
+                        val replyStart = reply.dataPosition()
+                        reply.readException()
+                        val response = reply.readTypedObject(KeyEntryResponse.CREATOR)
+                        if (response != null) {
+                            val responseKey =
+                                response.metadata
+                                    ?.key
+                                    ?.nspace
+                                    ?.takeIf { it != 0L }
+                                    ?.let { SecurityLevelInterceptor.keysByNspace[it] }
+                            val chain = CertificateUtils.run { response.getCertificateChain() }
+                            if (chain != null) {
+                                val newChain = CertificateHack.hackCertificateChain(chain, callingUid)
+                                response.putCertificateChain(newChain).getOrThrow()
+                                response.metadata?.authorizations =
+                                    CertificateHack.patchAuthorizations(response.metadata?.authorizations, callingUid)
+                                if (responseKey != null) {
+                                    SecurityLevelInterceptor.patchedResponses[responseKey] = response
+                                }
+                                Logger.d("Hacked certificate for uid=$callingUid")
+                                return createTypedObjectReply(response)
+                            }
+                        }
+                        reply.setDataPosition(replyStart)
                     }
                 }
             } catch (t: Throwable) {

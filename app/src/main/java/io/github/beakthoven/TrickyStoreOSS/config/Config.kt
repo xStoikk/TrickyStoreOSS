@@ -11,9 +11,13 @@ import android.os.FileObserver
 import android.os.IBinder
 import android.os.IInterface
 import android.os.ServiceManager
-import io.github.beakthoven.TrickyStoreOSS.AttestUtils.TEEStatus
+import io.github.beakthoven.TrickyStoreOSS.AttestUtils
 import io.github.beakthoven.TrickyStoreOSS.KeyBoxUtils
+import io.github.beakthoven.TrickyStoreOSS.tee.TeePhase3Trace
+import io.github.beakthoven.TrickyStoreOSS.tee.TeeProbeClassifier
+import io.github.beakthoven.TrickyStoreOSS.tee.TeeState
 import io.github.beakthoven.TrickyStoreOSS.interceptors.SecurityLevelInterceptor
+import io.github.beakthoven.TrickyStoreOSS.logging.DiagLog
 import io.github.beakthoven.TrickyStoreOSS.logging.Logger
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
@@ -68,15 +72,45 @@ object PkgConfig {
     @Volatile private var teeBroken: Boolean? = null
 
     private fun storeTEEStatus(root: File) {
+        when (AttestUtils.getState()) {
+            TeeState.UNKNOWN -> {
+                DiagLog.teeDecisionDeferred(AttestUtils.getState().name)
+                return
+            }
+            TeeState.WORKING -> persistTeeBroken(root, false)
+            TeeState.BROKEN -> persistTeeBroken(root, true)
+        }
+    }
+
+    private fun persistTeeBroken(root: File, broken: Boolean) {
         val statusFile = File(root, TEE_STATUS_FILE)
-        teeBroken = !TEEStatus
+        teeBroken = broken
+        DiagLog.teeDecision(broken, statusFile.absolutePath)
         try {
-            statusFile.writeText("teeBroken=${teeBroken}")
-            Logger.i("TEE status written to $statusFile: teeBroken=$teeBroken")
+            statusFile.writeText("teeBroken=$broken")
+            DiagLog.teeStatusWritten(statusFile.absolutePath, broken)
+            TeePhase3Trace.teeStatusWrite(broken)
+            Logger.i("TEE status written to $statusFile: teeBroken=$broken")
         } catch (e: Exception) {
             Logger.e("Failed to write TEE status: ${e.message}")
         }
     }
+
+    fun installTeeStateListener() {
+        AttestUtils.stateListener = { _, newState ->
+            when (newState) {
+                TeeState.WORKING -> {
+                    persistTeeBroken(root, false)
+                    io.github.beakthoven.TrickyStoreOSS.AndroidUtils.refreshBootHashFromAttestation()
+                }
+                TeeState.BROKEN -> persistTeeBroken(root, true)
+                TeeState.UNKNOWN -> DiagLog.teeDecisionDeferred(newState.name)
+            }
+        }
+    }
+
+    /** Read-only view of packages already resolved by checkNeed(); never calls PackageManager. */
+    fun diagnosticCachedPackagesForUid(uid: Int): Array<String>? = uidPackages[uid]
 
     object ConfigObserver : FileObserver(root, CLOSE_WRITE or DELETE or MOVED_FROM or MOVED_TO) {
         override fun onEvent(event: Int, path: String?) {
@@ -162,9 +196,20 @@ object PkgConfig {
         return raw.onFailure { Logger.e("failed to get packages", it) }.getOrNull() ?: false
     }
 
-    fun needHack(callingUid: Int): Boolean = checkNeed(callingUid, Mode.LEAF_HACK, teeBroken == false)
+    fun needHack(callingUid: Int): Boolean =
+        checkNeed(callingUid, Mode.LEAF_HACK, TeeProbeClassifier.autoLeafHackAllowed(teeBroken))
 
-    fun needGenerate(callingUid: Int): Boolean = checkNeed(callingUid, Mode.GENERATE, teeBroken == true)
+    fun needGenerate(callingUid: Int): Boolean =
+        checkNeed(callingUid, Mode.GENERATE, TeeProbeClassifier.autoGenerateAllowed(teeBroken))
+
+    /** True when any resolved package for [callingUid] uses explicit leaf mode (`?` in target.txt). */
+    fun isExplicitLeafHack(callingUid: Int): Boolean = hasTargetMode(callingUid, Mode.LEAF_HACK)
+
+    private fun hasTargetMode(callingUid: Int, mode: Mode): Boolean {
+        val packages = uidPackages[callingUid] ?: return false
+        return packages.any { packageModes[it] == mode }
+    }
+
 
     @Volatile private var globalPatchLevel: CustomPatchLevel? = null
 
