@@ -24,7 +24,6 @@ concurrency:
 
 jobs:
   draft-release:
-    if: github.repository == 'xStoikk/TrickyStoreOSS' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
 
     steps:
@@ -44,15 +43,22 @@ jobs:
             exit 1
           fi
 
-      - name: Check out main
+      - name: Check out dispatched main commit
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           submodules: recursive
-          ref: main
+          ref: ${{ github.sha }}
 
-      - name: Record release commit SHA
-        run: echo "RELEASE_SHA=$GITHUB_SHA" >> "$GITHUB_ENV"
+      - name: Verify checked-out commit SHA
+        run: |
+          set -euo pipefail
+          ACTUAL_SHA=$(git rev-parse HEAD)
+          if [[ "$ACTUAL_SHA" != "$GITHUB_SHA" ]]; then
+            echo "::error::Checked-out SHA $ACTUAL_SHA != dispatched GITHUB_SHA $GITHUB_SHA"
+            exit 1
+          fi
+          echo "RELEASE_SHA=$ACTUAL_SHA" >> "$GITHUB_ENV"
 
       - name: Validate tag matches product version
         env:
@@ -75,10 +81,23 @@ jobs:
           TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
-            echo "::error::Remote Git tag already exists: $TAG"
-            exit 1
-          fi
+          set +e
+          git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1
+          RC=$?
+          set -e
+          case "$RC" in
+            0)
+              echo "::error::Remote Git tag already exists: $TAG"
+              exit 1
+              ;;
+            2)
+              echo "Remote tag not found: $TAG"
+              ;;
+            *)
+              echo "::error::Remote tag lookup failed for $TAG (git ls-remote exit code $RC)"
+              exit 1
+              ;;
+          esac
 
       - name: Fail if GitHub Release already exists
         env:
@@ -86,10 +105,27 @@ jobs:
           TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "::error::GitHub Release already exists for tag: $TAG"
-            exit 1
-          fi
+          STATUS=$(curl -sS \
+            -o /tmp/release-check.json \
+            -w '%{http_code}' \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/$GITHUB_REPOSITORY/releases/tags/$TAG")
+          case "$STATUS" in
+            200)
+              echo "::error::GitHub Release already exists for tag: $TAG"
+              exit 1
+              ;;
+            404)
+              echo "No existing GitHub Release for tag: $TAG"
+              ;;
+            *)
+              echo "::error::GitHub Release lookup failed for tag $TAG (HTTP $STATUS)"
+              cat /tmp/release-check.json || true
+              exit 1
+              ;;
+          esac
 
       - name: Setup Java
         uses: actions/setup-java@v6
@@ -116,7 +152,6 @@ jobs:
       - name: Verify release-prep manifest
         env:
           TAG: ${{ inputs.tag }}
-          RELEASE_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           MANIFEST=out/release-prep/release-manifest.json
@@ -136,7 +171,7 @@ jobs:
 
           [[ "$SCHEMA" == "2" ]] || { echo "::error::schemaVersion must be 2"; exit 1; }
           [[ "$REPO" == "xStoikk/TrickyStoreOSS" ]] || { echo "::error::repository mismatch"; exit 1; }
-          [[ "$COMMIT" == "$RELEASE_SHA" ]] || { echo "::error::manifest commit $COMMIT != GITHUB_SHA $RELEASE_SHA"; exit 1; }
+          [[ "$COMMIT" == "$RELEASE_SHA" ]] || { echo "::error::manifest commit $COMMIT != RELEASE_SHA $RELEASE_SHA"; exit 1; }
           [[ "$PRODUCT" == "$TAG" ]] || { echo "::error::productVersion mismatch"; exit 1; }
           [[ "$RELEASE_TAG" == "$TAG" ]] || { echo "::error::releaseTag mismatch"; exit 1; }
           [[ "$STRATEGY" == "epoch+commitCount" ]] || { echo "::error::versionCodeStrategy mismatch"; exit 1; }
@@ -176,7 +211,7 @@ jobs:
           fi
 
           gh release create "$TAG" \
-            --target "$GITHUB_SHA" \
+            --target "$RELEASE_SHA" \
             --title "$TAG" \
             --draft \
             $PRERELEASE_FLAG \
@@ -191,6 +226,6 @@ jobs:
           TAG: ${{ inputs.tag }}
           RELEASE_ZIP: ${{ steps.manifest.outputs.releaseZip }}
         run: |
-          echo "Draft release created for tag $TAG at $GITHUB_SHA"
+          echo "Draft release created for tag $TAG at $RELEASE_SHA"
           echo "Attached Release ZIP: $RELEASE_ZIP"
           echo "update.json.next attached — not committed to main"
