@@ -150,6 +150,16 @@ object DiagLog {
         emit("INTERCEPTOR_READY name=$name ${bootContext()}")
     }
 
+    fun modeInput(
+        attestationKeyDescriptorSet: Boolean,
+        explicitSynthetic: Boolean,
+        hasAttestKeyPurpose: Boolean = false,
+    ) {
+        emit(
+            "MODE_INPUT attestationKeyDescriptor=${if (attestationKeyDescriptorSet) "set" else "null"} explicitSynthetic=$explicitSynthetic hasAttestKeyPurpose=$hasAttestKeyPurpose",
+        )
+    }
+
     fun modeRouting(
         callingUid: Int,
         packages: Array<String>?,

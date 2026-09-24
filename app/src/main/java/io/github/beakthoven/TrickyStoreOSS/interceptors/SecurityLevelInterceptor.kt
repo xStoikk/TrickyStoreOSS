@@ -759,6 +759,11 @@ class SecurityLevelInterceptor(private val original: IKeystoreSecurityLevel, pri
                     pkg.contains("gms") || pkg.contains("vending") || pkg.contains("google")
                 } == true
         if (!interesting) return
+        DiagLog.modeInput(
+            attestationKeyDescriptorSet = attestationKeyDescriptorSet,
+            explicitSynthetic = needGenerate,
+            hasAttestKeyPurpose = hasAttestKeyPurpose,
+        )
         DiagLog.modeRouting(
             callingUid = callingUid,
             packages = packages,
