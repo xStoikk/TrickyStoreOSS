@@ -1,131 +1,209 @@
 # Fork release identity
 
+
+
 Canonical fork: **xStoikk/TrickyStoreOSS**
+
 Upstream: **beakthoven/TrickyStoreOSS** (fetch-only)
 
-Phase 7C documents identity without changing Java/Kotlin package names or publishing a release.
+
+
+Phase 7D authorizes first public fork product version and structural cutover without publishing a release.
+
+
 
 ## Three identity layers
 
-| Layer | Value | Phase 7C change |
+
+
+| Layer | Value | Phase 7D change |
+
 |-------|-------|-----------------|
+
 | **Upstream authorship** | beakthoven, original Tricky Store OSS | Preserved in copyright, history, upstream attribution |
-| **Fork maintainer** | xStoikk | Documented; release metadata uses `xStoikk/TrickyStoreOSS` |
-| **Technical package ID** | `tricky_store`, `io.github.beakthoven.TrickyStoreOSS` | **Unchanged** — out of scope |
 
-## Current release identity (audit @ `9816553`)
+| **Fork maintainer** | xStoikk | Packaged `author=` and release metadata |
 
-| Field | Source | Current value |
-|-------|--------|---------------|
-| A. Module display name | `module/module.prop` → packaged | `Tricky Store OSS` |
+| **Technical package ID** | `tricky_store`, `io.github.beakthoven.TrickyStoreOSS` | **Unchanged** |
+
+
+
+## Authorized release identity (Phase 7D)
+
+
+
+| Field | Source | Value |
+
+|-------|--------|-------|
+
+| A. Module display name | `module/module.prop` | `Tricky Store OSS` |
+
 | B. Module ID | `module/module.prop` | `tricky_store` |
-| C. Module author | `module/module.prop` | `beakthoven` |
+
+| C. Module author | `module/module.prop` | `xStoikk (fork; upstream by beakthoven)` |
+
 | D. applicationId | `app/build.gradle.kts` | `io.github.beakthoven.TrickyStoreOSS` |
+
 | E. namespace | `app/build.gradle.kts` | `io.github.beakthoven.TrickyStoreOSS` |
-| F. verName | `gradle.properties` → `trickyStoreVersionName` | `v3.1.6-auto-tee-passthrough` |
-| G. versionCode | `git rev-list HEAD --count` | Integer commit count (derived at build) |
-| H. ZIP filename | `app/build.gradle.kts` `zip*` task | `Tricky-Store-OSS-{verName}-{count}-{sha}-{Variant}.zip` |
-| I. updateJson (packaged) | `module/module.prop` template | `https://raw.githubusercontent.com/beakthoven/TrickyStoreOSS/main/update.json` |
-| J. update.json version | tracked `update.json` | `v3.1.0` |
-| K. update.json versionCode | tracked `update.json` | `172` |
-| L. update.json zipUrl | tracked `update.json` | upstream Release asset URL |
-| M. changelog URL | tracked `update.json` | upstream `changelog.md` raw URL |
-| N. TeeBuildInfo.VERSION | generated from `trickyStoreVersionName` | same as F |
-| O. TeeBuildInfo.GIT | generated short SHA (+ `-dirty`) | build-time HEAD |
-| P. TeeBuildInfo.PHASE | `teeBuildPhase` in `app/build.gradle.kts` | `4C` |
 
-Packaged `module.prop` version format: `{verName} ({count}-{sha}-release)`.
+| F. Product version | `gradle.properties` → `trickyStoreVersionName` | **`v3.2.0-oss.1`** |
 
-## Recommended module author (first fork release)
+| G. versionCode | `100000 + git rev-list HEAD --count` | Epoch **100000** + commit count |
 
-**Do not change `author=` in Phase 7C.**
+| H. commitCount (provenance) | `git rev-list HEAD --count` | Engineering provenance only |
 
-Recommended first public fork release display:
+| I. ZIP filename | `zip*` task | `Tricky-Store-OSS-{verName}-{commitCount}-{sha}-{Variant}.zip` |
 
-**`xStoikk (fork; upstream by beakthoven)`**
+| J. updateJson (packaged) | `module/module.prop` | `https://raw.githubusercontent.com/xStoikk/TrickyStoreOSS/main/update.json` |
 
-Rationale: preserves upstream credit, signals fork maintainer, avoids implying beakthoven publishes xStoikk builds.
+| K. update.json (tracked) | `update.json` on `main` | **Still upstream** `v3.1.0` / `172` until draft asset PR |
 
-## Version source of truth
+| L. TeeBuildInfo.VERSION | generated from `trickyStoreVersionName` | `v3.2.0-oss.1` |
 
-| Field | Authority |
-|-------|-----------|
-| Product version string | `gradle.properties` → `trickyStoreVersionName` |
-| versionCode | `git rev-list HEAD --count` |
-| Runtime architecture phase | `teeBuildPhase` in `app/build.gradle.kts` (not project phase number) |
+| M. TeeBuildInfo.PHASE | `teeBuildPhase` in `app/build.gradle.kts` | **`4C`** (unchanged) |
 
-Release tooling reads `gradle.properties` without parsing Kotlin.
 
-## TeeBuildInfo.PHASE
 
-`PHASE=4C` is the **runtime architecture milestone** embedded at build time. It is **not** the engineering phase label (7A, 7B, 7C). No change in Phase 7C — architecture contract unchanged.
+Packaged `module.prop` version display: `{productVersion} ({commitCount}-{sha}-release)` — suffix uses **commit count**, not epoch versionCode.
+
+
+
+## Build metadata distinction
+
+
+
+| Concept | Purpose | Example |
+
+|---------|---------|---------|
+
+| **commitCount** | Engineering provenance in ZIP name and module display version | `195` |
+
+| **versionCode** | KernelSU integer update ordering | `100195` |
+
+| **productVersion** | Human release identity | `v3.2.0-oss.1` |
+
+| **Git tag** | Public release pointer | `v3.2.0-oss.1` (must equal product version) |
+
+
+
+ZIP count segment stays at raw commit count — not `100xxx`.
+
+
+
+## versionCode epoch policy
+
+
+
+**Formula:** `versionCode = 100000 + commitCount`
+
+
+
+KernelSU requires integer `versionCode` for update comparison. The fork epoch isolates xStoikk update ordering from upstream's independent commit-count history.
+
+
+
+**Within xStoikk release policy:** epoch fixed at **100000**; protected-main commit count increases monotonically → published versionCode increases monotonically. This does not claim collision-proof behavior against every possible external repository scheme.
+
+
+
+Public releases must be cut **only from protected `main`**.
+
+
 
 ## Tag / product version invariant
 
-**Git release tag must equal packaged product version.**
 
-Example packaged `module.prop` line:
 
-`version=v3.1.6-auto-tee-passthrough (192-abcdef0-release)`
+Git release tag must equal packaged product version.
 
-Canonical product version: `v3.1.6-auto-tee-passthrough`
 
-`prepare-release.ps1 -Tag` fails if Tag ≠ product version extracted from the validated Release ZIP.
 
-`update.json.next` uses product version for `version` and Tag for `zipUrl` path (equal when validation passes).
+`prepare-release.ps1 -Tag` fails if Tag ≠ product version from Release ZIP `module.prop`.
 
-## Post-7C dry-run (current product version)
 
-Until `trickyStoreVersionName` is authorized to change:
+
+Post-7D acceptance (clean tree on protected `main`):
+
+
 
 ```powershell
-pwsh scripts/prepare-release.ps1
-```
 
-**Without `-Tag`.** Produces `release-manifest.json` and `release-summary.md` only.
-
-After authorizing **`v3.2.0-oss.1`** in `gradle.properties` and rebuilding from protected `main`:
-
-```powershell
 pwsh scripts/prepare-release.ps1 -Tag v3.2.0-oss.1
+
 ```
 
-## First public fork release — update feed policy
 
-**The first public xStoikk fork release must already point at the fork feed:**
 
-`https://raw.githubusercontent.com/xStoikk/TrickyStoreOSS/main/update.json`
+Generates `release-manifest.json`, `release-summary.md`, and `update.json.next`.
 
-Do **not** implement that URL change in Phase 7C. Development builds remain upstream-feed until the deliberate cutover release-prep branch.
 
-### Safe first-public-release sequence
+
+## Tracked update.json — transient mismatch
+
+
+
+**Packaged** modules now point at the xStoikk fork feed.
+
+
+
+**Tracked** `update.json` on `main` still describes upstream `v3.1.0` / `172` because no xStoikk release asset exists yet.
+
+
+
+This is acceptable **only while Phase 7D is unpublished**. Before `v3.2.0-oss.1` goes public:
+
+
+
+1. Create draft release via `release-fork.yml` (manual dispatch)
+
+2. Commit tracked `update.json` from `out/release-prep/update.json.next` via PR → green Build → FF
+
+3. Verify raw fork feed on `main`
+
+4. Publish draft release
+
+
+
+## First public fork release sequence
+
+
 
 | Step | Action |
+
 |------|--------|
-| A | Release-prep branch: authorize public version (`v3.2.0-oss.1`), adopt versionCode strategy, change `module.prop` `updateJson` to xStoikk feed → PR → green Build → FF to protected `main` |
-| B | Prepare exact artifact from protected `main` (`validate-release` + `prepare-release -Tag …`) |
-| C | Create **draft** GitHub Release for exact tag/SHA; upload validated Release ZIP |
-| D | Generate candidate fork `update.json` from exact artifact/tag |
-| E | Verify tag, version, versionCode, ZIP name, SHA, asset URL |
-| F | Commit tracked `update.json` via branch → PR → green Build → FF |
-| G | Verify raw fork `update.json` on `main` |
-| H | Publish draft GitHub Release |
 
-Result: first public release module and fork feed describe the same release — **no second feed-migration release**.
+| A | Phase 7D merged: version, epoch, author, packaged feed on protected `main` |
 
-## Future public version / tag pair (not yet authorized)
+| B | Manual `release-fork.yml` dispatch on `main` → draft release + assets |
 
-| Field | Future value |
-|-------|----------------|
-| Product version (`trickyStoreVersionName`) | `v3.2.0-oss.1` |
-| Git tag | `v3.2.0-oss.1` |
+| C | Verify manifest, ZIP, candidate `update.json.next` |
 
-They must move together. Do **not** tag `v3.2.0-oss.1` while product version remains `v3.1.6-auto-tee-passthrough`.
+| D | PR tracked `update.json` → green Build → FF to `main` |
 
-## versionCode strategy (recommendation — not final)
+| E | Verify raw fork `update.json` |
 
-**Development:** continue `git rev-list HEAD --count`.
+| F | Publish draft GitHub Release |
 
-**Before public fork feed:** evaluate fork epoch, e.g. **`100000 + commitCount`** — not implemented in Phase 7C.
 
-Public releases must be cut **only from protected `main`** (linear canonical history); commit-count versioning is meaningless on arbitrary feature branches.
+
+First public release ships with fork feed in module **and** fork feed describing that release — no second migration release.
+
+
+
+## TeeBuildInfo.PHASE
+
+
+
+`PHASE=4C` is the **runtime architecture milestone**. Not the engineering phase label. Unchanged in Phase 7D.
+
+
+
+## Draft release tag side effect
+
+
+
+Creating a draft GitHub Release via `release-fork.yml` may create Git ref `v3.2.0-oss.1` at the release commit. Expected.
+
+
+
+Inherited upstream `release.yml` remains inert on xStoikk via `github.repository == 'beakthoven/TrickyStoreOSS'` guard — do not remove.

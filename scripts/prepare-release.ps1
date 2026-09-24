@@ -10,8 +10,7 @@
   3. Create out/release-prep/ and write manifest/summary
   4. With -Tag: also write update.json.next when Tag matches packaged product version
 
-  Post-7C acceptance (current product version): run WITHOUT -Tag.
-  After authorizing v3.2.0-oss.1 bump: run with -Tag v3.2.0-oss.1
+  Post-7D acceptance: pwsh scripts/prepare-release.ps1 -Tag v3.2.0-oss.1
 #>
 [CmdletBinding()]
 param(
@@ -60,6 +59,7 @@ function Get-FileSha256Hex([string]$Path) {
 function Get-ZipEntrySha256Hex([string]$ZipPath, [string]$EntryName) {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $zip = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
+    $temp = $null
     try {
         $entry = $zip.GetEntry($EntryName)
         if ($null -eq $entry) {
@@ -71,6 +71,9 @@ function Get-ZipEntrySha256Hex([string]$ZipPath, [string]$EntryName) {
     }
     finally {
         $zip.Dispose()
+        if ($null -ne $temp -and (Test-Path $temp)) {
+            Remove-Item $temp -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 
@@ -122,6 +125,26 @@ function Assert-ReleaseTag([string]$Value) {
     }
 }
 
+function Get-VersionCodeEpochFromGradleProperties {
+    $gradleProps = Join-Path $RepoRoot 'gradle.properties'
+    if (-not (Test-Path $gradleProps)) {
+        throw "Missing gradle.properties at $gradleProps"
+    }
+    $matches = @(Select-String -Path $gradleProps -Pattern '^\s*trickyStoreVersionCodeEpoch\s*=\s*(.+)\s*$')
+    if ($matches.Count -ne 1) {
+        throw "gradle.properties must define exactly one trickyStoreVersionCodeEpoch property (found $($matches.Count))"
+    }
+    $raw = $matches[0].Matches[0].Groups[1].Value.Trim()
+    if ($raw -notmatch '^\d+$') {
+        throw "trickyStoreVersionCodeEpoch must be a non-negative integer in gradle.properties: '$raw'"
+    }
+    $epoch = [int]$raw
+    if ($epoch -lt 0) {
+        throw "trickyStoreVersionCodeEpoch must be >= 0 in gradle.properties: $epoch"
+    }
+    return $epoch
+}
+
 function Get-TeeBuildPhaseFromGeneratedInfo {
     $teeBuildInfo = Join-Path $RepoRoot 'app/build/generated/source/teeBuildInfo/kotlin/io/github/beakthoven/TrickyStoreOSS/tee/TeeBuildInfo.kt'
     if (-not (Test-Path $teeBuildInfo)) {
@@ -142,10 +165,14 @@ $branch = git branch --show-current
 $fullSha = git rev-parse HEAD
 $shortSha = git rev-parse --short=7 HEAD
 $commitCount = [int](git rev-list HEAD --count)
+$versionCodeEpoch = Get-VersionCodeEpochFromGradleProperties
+$expectedVersionCode = $versionCodeEpoch + $commitCount
 Write-Host "branch=$branch"
 Write-Host "HEAD=$fullSha"
 Write-Host "shortCommit=$shortSha"
 Write-Host "commitCount=$commitCount"
+Write-Host "versionCodeEpoch=$versionCodeEpoch"
+Write-Host "expectedVersionCode=$expectedVersionCode"
 
 # 4. validate-release clears out/ and builds exact artifacts.
 Write-Step 'Release validation'
@@ -181,8 +208,8 @@ if ($moduleProp['versionCode'] -notmatch '^\d+$') {
     throw "Packaged versionCode must be numeric: $($moduleProp['versionCode'])"
 }
 $packagedVersionCode = [int]$moduleProp['versionCode']
-if ($packagedVersionCode -ne $commitCount) {
-    throw "Packaged versionCode ($packagedVersionCode) != git commit count ($commitCount)"
+if ($packagedVersionCode -ne $expectedVersionCode) {
+    throw "Packaged versionCode ($packagedVersionCode) != expected epoch versionCode ($expectedVersionCode = $versionCodeEpoch + $commitCount)"
 }
 if ($moduleProp['version'] -notmatch [regex]::Escape($shortSha)) {
     throw "Packaged module version must contain short SHA '$shortSha': $($moduleProp['version'])"
@@ -212,19 +239,21 @@ New-Item -ItemType Directory -Force -Path $prepDir | Out-Null
 
 $trackedUpdateJson = Join-Path $RepoRoot 'update.json'
 
-# Artifact-derived manifest (schemaVersion 1). generatedAtUtc is audit-only; manifest bytes are not reproducible.
+# Artifact-derived manifest (schemaVersion 2). generatedAtUtc is audit-only; manifest bytes are not reproducible.
 $manifest = [ordered]@{
-    schemaVersion        = 1
+    schemaVersion        = 2
     repository           = $Repository
     commit               = $fullSha
     shortCommit          = $shortSha
     commitCount          = $commitCount
     productVersion       = $productVersion
+    versionCodeStrategy  = 'epoch+commitCount'
+    versionCodeEpoch     = $versionCodeEpoch
+    versionCode          = $packagedVersionCode
     moduleId             = $moduleProp['id']
     moduleName           = $moduleProp['name']
     moduleAuthor         = $moduleProp['author']
     moduleVersion        = $moduleProp['version']
-    versionCode          = $packagedVersionCode
     releaseZip           = $releaseZip.Name
     releaseZipSha256     = $releaseSha
     classesDexSha256     = $dexSha
@@ -252,8 +281,10 @@ $summary = @"
 - shortCommit: $shortSha
 - commitCount: $commitCount
 - productVersion: $productVersion
-- module version: $($moduleProp['version'])
+- versionCodeStrategy: epoch+commitCount
+- versionCodeEpoch: $versionCodeEpoch
 - versionCode: $packagedVersionCode
+- module version: $($moduleProp['version'])
 - release artifact: $($releaseZip.Name)
 - release ZIP SHA256: $releaseSha
 - classes.dex SHA256: $dexSha

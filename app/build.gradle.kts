@@ -15,6 +15,24 @@ val verName =
     providers.gradleProperty("trickyStoreVersionName").orNull?.takeIf { it.isNotBlank() }
         ?: error("trickyStoreVersionName is not set in gradle.properties")
 
+/** Fork versionCode epoch — fixed offset isolating update ordering from upstream commit counts. */
+val versionCodeEpoch: Int =
+    providers.gradleProperty("trickyStoreVersionCodeEpoch").orNull?.trim()?.let { raw ->
+        if (raw.isEmpty()) {
+            error("trickyStoreVersionCodeEpoch must not be blank in gradle.properties")
+        }
+        raw.toIntOrNull()
+            ?: error("trickyStoreVersionCodeEpoch must be a valid integer in gradle.properties: '$raw'")
+    }?.also { epoch ->
+        if (epoch < 0) {
+            error("trickyStoreVersionCodeEpoch must be non-negative in gradle.properties: $epoch")
+        }
+    } ?: error("trickyStoreVersionCodeEpoch is not set in gradle.properties")
+
+/** Packaged module author and update feed for xStoikk fork releases. */
+val forkModuleAuthor = "xStoikk (fork; upstream by beakthoven)"
+val forkUpdateJsonUrl = "https://raw.githubusercontent.com/xStoikk/TrickyStoreOSS/main/update.json"
+
 /** Runtime architecture milestone embedded in BUILD_ID; not incremented for build-only phases. */
 val teeBuildPhase = "4C"
 
@@ -43,6 +61,18 @@ val gitDirtyTreeProvider =
 val gitCommitHash = gitCommitHashProvider.get()
 
 val gitCommitCount = gitCommitCountProvider.get()
+
+/** KernelSU update ordering: epoch + commit count (distinct from ZIP/display commit count). */
+val moduleVersionCode: Int =
+    (versionCodeEpoch.toLong() + gitCommitCount.toLong()).let { sum ->
+        if (sum > Int.MAX_VALUE) {
+            error(
+                "moduleVersionCode overflow: versionCodeEpoch=$versionCodeEpoch + " +
+                    "gitCommitCount=$gitCommitCount exceeds Int.MAX_VALUE",
+            )
+        }
+        sum.toInt()
+    }
 
 /** TeeBuildInfo.GIT: short SHA, plus -dirty when tracked files differ from HEAD. */
 val teeBuildInfoGitProvider =
@@ -128,7 +158,7 @@ android {
         applicationId = "io.github.beakthoven.TrickyStoreOSS"
         minSdk = 29
         targetSdk = 37
-        versionCode = gitCommitCount
+        versionCode = moduleVersionCode
         versionName = verName
 
         externalNativeBuild {
@@ -253,6 +283,7 @@ androidComponents {
             val commitCount = gitCommitCount
             val commitHash = gitCommitHash
             val versionName = verName
+            val packagedVersionCode = moduleVersionCode
             val variant = variantName
             val tempDirProvider = tempModuleDir
             val stageDirProvider = variantStageDir
@@ -312,7 +343,7 @@ androidComponents {
                 val content = sourceProp.readText()
                 val processedContent =
                     content
-                        .replace("REPLACEMEVERCODE", commitCount.toString())
+                        .replace("REPLACEMEVERCODE", packagedVersionCode.toString())
                         .replace("REPLACEMEVER", "$versionName ($commitCount-$commitHash-$variant)")
                 destProp.writeText(processedContent)
             }
@@ -331,6 +362,11 @@ androidComponents {
             val zipArchive = zipTask.flatMap { it.archiveFile }
             inputs.file(zipArchive)
             val expectedVariantToken = variantName.lowercase()
+            val expectedVersionCode = moduleVersionCode
+            val expectedProductVersion = verName
+            val expectedShortSha = gitCommitHash
+            val expectedAuthor = forkModuleAuthor
+            val expectedUpdateJson = forkUpdateJsonUrl
 
             doLast {
                 val zipFile = zipArchive.get().asFile
@@ -365,6 +401,48 @@ androidComponents {
                     }
                 check(moduleProp.contains(expectedVariantToken, ignoreCase = true)) {
                     "${zipFile.name} module.prop must reference variant '$expectedVariantToken'"
+                }
+
+                val propMap =
+                    moduleProp
+                        .lineSequence()
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() && !it.startsWith("#") }
+                        .mapNotNull { line ->
+                            val idx = line.indexOf('=')
+                            if (idx < 1) null else line.substring(0, idx).trim() to line.substring(idx + 1).trim()
+                        }
+                        .toMap()
+
+                val packagedVersionCode =
+                    propMap["versionCode"]?.toIntOrNull()
+                        ?: error("${zipFile.name} module.prop versionCode is missing or not numeric")
+                check(packagedVersionCode == expectedVersionCode) {
+                    "${zipFile.name} module.prop versionCode=$packagedVersionCode expected $expectedVersionCode"
+                }
+
+                val packagedVersion =
+                    propMap["version"]
+                        ?: error("${zipFile.name} module.prop missing version")
+                check(packagedVersion.contains(expectedProductVersion)) {
+                    "${zipFile.name} module.prop version must contain product version '$expectedProductVersion': $packagedVersion"
+                }
+                check(packagedVersion.contains(expectedShortSha)) {
+                    "${zipFile.name} module.prop version must contain short SHA '$expectedShortSha': $packagedVersion"
+                }
+                check(packagedVersion.contains(expectedVariantToken, ignoreCase = true)) {
+                    "${zipFile.name} module.prop version must reference variant '$expectedVariantToken': $packagedVersion"
+                }
+
+                val packagedAuthor = propMap["author"] ?: error("${zipFile.name} module.prop missing author")
+                check(packagedAuthor == expectedAuthor) {
+                    "${zipFile.name} module.prop author='$packagedAuthor' expected '$expectedAuthor'"
+                }
+
+                val packagedUpdateJson =
+                    propMap["updateJson"] ?: error("${zipFile.name} module.prop missing updateJson")
+                check(packagedUpdateJson == expectedUpdateJson) {
+                    "${zipFile.name} module.prop updateJson='$packagedUpdateJson' expected '$expectedUpdateJson'"
                 }
             }
         }
