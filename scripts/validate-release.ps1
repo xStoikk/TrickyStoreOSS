@@ -108,6 +108,13 @@ if (-not (Test-Path $gradlew)) {
     throw "Missing $gradlew"
 }
 
+Write-Step 'Clear module ZIP output directory'
+$OutDir = Join-Path $RepoRoot 'out'
+if (Test-Path $OutDir) {
+    Remove-Item $OutDir -Recurse -Force
+    Write-Host "Removed $OutDir"
+}
+
 Write-Step 'Gradle acceptance suite'
 $gradleTasks = @(
     'testDebugUnitTest',
