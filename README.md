@@ -98,7 +98,7 @@ com.google.android.gms!             # explicit software-synthetic
 
 **Release validation (local):** `pwsh scripts/validate-release.ps1` — same Gradle gates as CI; requires clean git tree.
 
-**Release prep (dry-run):** `pwsh scripts/prepare-release.ps1` — validation + `out/release-prep/` manifest; no publish. `-Tag` only after product version is authorized.
+**Release prep (dry-run):** `pwsh scripts/prepare-release.ps1 -Tag v3.2.0-oss.1` — validation + candidate manifest/update metadata; no publish. Fork draft release: manual `release-fork.yml` dispatch on `main` only.
 
 ### `security_patch.txt`
 

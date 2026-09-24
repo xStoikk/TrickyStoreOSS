@@ -1,0 +1,196 @@
+name: Fork Draft Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag (must equal trickyStoreVersionName)
+        required: true
+        type: string
+      prerelease:
+        description: Mark release as prerelease
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: fork-draft-release-${{ github.repository }}-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  draft-release:
+    if: github.repository == 'xStoikk/TrickyStoreOSS' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Refuse non-fork or non-main dispatch
+        if: github.repository != 'xStoikk/TrickyStoreOSS' || github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Fork draft release may only run on xStoikk/TrickyStoreOSS refs/heads/main"
+          exit 1
+
+      - name: Validate tag syntax
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^v[A-Za-z0-9._-]+$ ]]; then
+            echo "::error::Invalid release tag syntax: $TAG"
+            exit 1
+          fi
+
+      - name: Check out main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          ref: main
+
+      - name: Record release commit SHA
+        run: echo "RELEASE_SHA=$GITHUB_SHA" >> "$GITHUB_ENV"
+
+      - name: Validate tag matches product version
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          PRODUCT_VERSION=$(grep -E '^trickyStoreVersionName=' gradle.properties | cut -d= -f2- | tr -d '\r')
+          if [[ -z "$PRODUCT_VERSION" ]]; then
+            echo "::error::trickyStoreVersionName missing from gradle.properties"
+            exit 1
+          fi
+          if [[ "$TAG" != "$PRODUCT_VERSION" ]]; then
+            echo "::error::Release tag '$TAG' does not match trickyStoreVersionName '$PRODUCT_VERSION'"
+            exit 1
+          fi
+          echo "productVersion=$PRODUCT_VERSION" >> "$GITHUB_ENV"
+
+      - name: Fail if remote tag already exists
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "::error::Remote Git tag already exists: $TAG"
+            exit 1
+          fi
+
+      - name: Fail if GitHub Release already exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "::error::GitHub Release already exists for tag: $TAG"
+            exit 1
+          fi
+
+      - name: Setup Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 26
+
+      - name: Set up ccache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: ccache-${{ runner.os }}-release-fork
+          restore-keys: |
+            ccache-${{ runner.os }}-release-fork
+            ccache-${{ runner.os }}-
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6.3.0
+
+      - name: Prepare release metadata and artifacts
+        env:
+          TAG: ${{ inputs.tag }}
+        run: pwsh ./scripts/prepare-release.ps1 -Tag "$TAG"
+
+      - name: Verify release-prep manifest
+        env:
+          TAG: ${{ inputs.tag }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          MANIFEST=out/release-prep/release-manifest.json
+          test -f "$MANIFEST"
+
+          SCHEMA=$(jq -r '.schemaVersion' "$MANIFEST")
+          REPO=$(jq -r '.repository' "$MANIFEST")
+          COMMIT=$(jq -r '.commit' "$MANIFEST")
+          PRODUCT=$(jq -r '.productVersion' "$MANIFEST")
+          RELEASE_TAG=$(jq -r '.releaseTag // empty' "$MANIFEST")
+          STRATEGY=$(jq -r '.versionCodeStrategy' "$MANIFEST")
+          EPOCH=$(jq -r '.versionCodeEpoch' "$MANIFEST")
+          UPDATE_JSON=$(jq -r '.packagedUpdateJson' "$MANIFEST")
+          RELEASE_ZIP=$(jq -r '.releaseZip' "$MANIFEST")
+
+          FORK_FEED='https://raw.githubusercontent.com/xStoikk/TrickyStoreOSS/main/update.json'
+
+          [[ "$SCHEMA" == "2" ]] || { echo "::error::schemaVersion must be 2"; exit 1; }
+          [[ "$REPO" == "xStoikk/TrickyStoreOSS" ]] || { echo "::error::repository mismatch"; exit 1; }
+          [[ "$COMMIT" == "$RELEASE_SHA" ]] || { echo "::error::manifest commit $COMMIT != GITHUB_SHA $RELEASE_SHA"; exit 1; }
+          [[ "$PRODUCT" == "$TAG" ]] || { echo "::error::productVersion mismatch"; exit 1; }
+          [[ "$RELEASE_TAG" == "$TAG" ]] || { echo "::error::releaseTag mismatch"; exit 1; }
+          [[ "$STRATEGY" == "epoch+commitCount" ]] || { echo "::error::versionCodeStrategy mismatch"; exit 1; }
+          [[ "$EPOCH" == "100000" ]] || { echo "::error::versionCodeEpoch must be 100000"; exit 1; }
+          [[ "$UPDATE_JSON" == "$FORK_FEED" ]] || { echo "::error::packagedUpdateJson mismatch"; exit 1; }
+          [[ -f "out/$RELEASE_ZIP" ]] || { echo "::error::Release ZIP missing: out/$RELEASE_ZIP"; exit 1; }
+
+          echo "releaseZip=$RELEASE_ZIP" >> "$GITHUB_OUTPUT"
+        id: manifest
+
+      - name: Attest Release ZIP
+        uses: actions/attest@v4
+        with:
+          subject-path: out/${{ steps.manifest.outputs.releaseZip }}
+          subject-name: ${{ inputs.tag }}
+
+      - name: Compose draft release notes
+        run: |
+          set -euo pipefail
+          {
+            echo "**DRAFT — update feed has not yet been committed. Do not publish until update.json metadata PR is merged and verified.**"
+            echo
+            cat out/release-prep/release-summary.md
+          } > /tmp/release-notes.md
+
+      - name: Create draft GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+          PRERELEASE: ${{ inputs.prerelease }}
+          RELEASE_ZIP: ${{ steps.manifest.outputs.releaseZip }}
+        run: |
+          set -euo pipefail
+          PRERELEASE_FLAG=""
+          if [[ "$PRERELEASE" == "true" ]]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --title "$TAG" \
+            --draft \
+            $PRERELEASE_FLAG \
+            --notes-file /tmp/release-notes.md \
+            "out/$RELEASE_ZIP" \
+            out/release-prep/release-manifest.json \
+            out/release-prep/update.json.next \
+            out/release-prep/release-summary.md
+
+      - name: Draft release summary
+        env:
+          TAG: ${{ inputs.tag }}
+          RELEASE_ZIP: ${{ steps.manifest.outputs.releaseZip }}
+        run: |
+          echo "Draft release created for tag $TAG at $GITHUB_SHA"
+          echo "Attached Release ZIP: $RELEASE_ZIP"
+          echo "update.json.next attached — not committed to main"

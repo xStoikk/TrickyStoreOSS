@@ -46,9 +46,23 @@ function Get-FileSha256Hex([string]$Path) {
     return (Get-FileHash -Path $Path -Algorithm SHA256).Hash.ToLowerInvariant()
 }
 
+function Get-GradleWrapperPath {
+    if ($IsWindows) {
+        $wrapper = Join-Path $RepoRoot 'gradlew.bat'
+    }
+    else {
+        $wrapper = Join-Path $RepoRoot 'gradlew'
+    }
+    if (-not (Test-Path $wrapper)) {
+        throw "Missing Gradle wrapper: $wrapper"
+    }
+    return $wrapper
+}
+
 function Get-ZipEntrySha256Hex([string]$ZipPath, [string]$EntryName) {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     $zip = [System.IO.Compression.ZipFile]::OpenRead($ZipPath)
+    $temp = $null
     try {
         $entry = $zip.Entries | Where-Object { $_.FullName -eq $EntryName -or $_.Name -eq $EntryName } | Select-Object -First 1
         if ($null -eq $entry) {
@@ -60,6 +74,9 @@ function Get-ZipEntrySha256Hex([string]$ZipPath, [string]$EntryName) {
     }
     finally {
         $zip.Dispose()
+        if ($null -ne $temp -and (Test-Path $temp)) {
+            Remove-Item $temp -Force -ErrorAction SilentlyContinue
+        }
     }
 }
 
@@ -103,10 +120,8 @@ $head = git rev-parse HEAD
 Write-Host "branch=$branch"
 Write-Host "HEAD=$head"
 
-$gradlew = Join-Path $RepoRoot 'gradlew.bat'
-if (-not (Test-Path $gradlew)) {
-    throw "Missing $gradlew"
-}
+$gradlew = Get-GradleWrapperPath
+Write-Host "gradlew=$gradlew"
 
 Write-Step 'Clear module ZIP output directory'
 $OutDir = Join-Path $RepoRoot 'out'
