@@ -172,10 +172,18 @@ object DiagLog {
         hasAttestationChallenge: Boolean,
         forceForge: Boolean,
         selected: String,
+        trustClass: String? = null,
+        trustClassReason: String? = null,
     ) {
         val pkgLabel = packages?.joinToString(",") ?: "uncached"
+        val trustSuffix =
+            if (trustClass != null && trustClassReason != null) {
+                " trustClass=$trustClass trustClassReason=$trustClassReason"
+            } else {
+                ""
+            }
         emit(
-            "MODE_ROUTE uid=$callingUid pkgs=$pkgLabel alias=${alias ?: "null"} needHack=$needHack needGenerate=$needGenerate hasDeviceIdAttestation=$hasDeviceIdAttestation hasAttestKeyPurpose=$hasAttestKeyPurpose attestationKeyDescriptor=${if (attestationKeyDescriptorSet) "set" else "null"} hasAttestationChallenge=$hasAttestationChallenge forceForge=$forceForge selected=$selected",
+            "MODE_ROUTE uid=$callingUid pkgs=$pkgLabel alias=${alias ?: "null"} needHack=$needHack needGenerate=$needGenerate hasDeviceIdAttestation=$hasDeviceIdAttestation hasAttestKeyPurpose=$hasAttestKeyPurpose attestationKeyDescriptor=${if (attestationKeyDescriptorSet) "set" else "null"} hasAttestationChallenge=$hasAttestationChallenge forceForge=$forceForge selected=$selected$trustSuffix",
         )
     }
 
@@ -195,8 +203,19 @@ object DiagLog {
         )
     }
 
-    fun certPath(action: String, reason: String) {
-        emit("CERT_PATH action=$action reason=$reason ${bootContext()}")
+    fun certPath(
+        action: String,
+        reason: String,
+        trustClass: String? = null,
+        trustClassReason: String? = null,
+    ) {
+        val trustSuffix =
+            if (trustClass != null && trustClassReason != null) {
+                " trustClass=$trustClass trustClassReason=$trustClassReason"
+            } else {
+                ""
+            }
+        emit("CERT_PATH action=$action reason=$reason$trustSuffix ${bootContext()}")
     }
 
     fun passthroughResult(callingUid: Int, success: Boolean, replyUnchanged: Boolean) {
@@ -207,6 +226,10 @@ object DiagLog {
 
     fun passthroughTrack(event: String, uid: Int, aliasHash: String) {
         emit("PASSTHROUGH_TRACK $event uid=$uid alias_hash=$aliasHash ${bootContext()}")
+    }
+
+    fun passthroughProvenance(kind: String, uid: Int, aliasHash: String) {
+        emit("PASSTHROUGH_PROVENANCE $kind uid=$uid alias_hash=$aliasHash ${bootContext()}")
     }
 
     fun certStateClear(uid: Int, aliasHash: String, reason: String) {

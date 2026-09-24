@@ -360,11 +360,26 @@ object Keystore2Interceptor : BaseKeystoreInterceptor() {
         return Skip
     }
 
-    private fun logPassthroughGetKeyEntryHit(uid: Int, descriptor: KeyDescriptor) {
+    private fun logPassthroughGetKeyEntryHit(uid: Int, descriptor: KeyDescriptor, isPassthroughTracked: Boolean) {
         val alias =
             descriptor.alias ?: SecurityLevelInterceptor.findAliasForNspace(uid, descriptor.nspace)
-        DiagLog.passthroughTrack("hit", uid, PassthroughKeyRegistry.aliasHash(alias))
-        DiagLog.certPath(action = "passthrough-getKeyEntry", reason = "real_tee")
+        val aliasHash = PassthroughKeyRegistry.aliasHash(alias)
+        when (GetKeyEntryPassthroughDiag.registrySignal(isPassthroughTracked)) {
+            PassthroughGetKeyEntryRegistrySignal.TRACK_HIT ->
+                DiagLog.passthroughTrack("hit", uid, aliasHash)
+            PassthroughGetKeyEntryRegistrySignal.PROVENANCE_REAL_KEYSTORE_UNTRACKED ->
+                DiagLog.passthroughProvenance("real-keystore-untracked", uid, aliasHash)
+        }
+        val label = TrustClassMapping.forGetKeyEntryPostAction(
+            GetKeyEntryPostPolicy.Action.PASSTHROUGH_UNMODIFIED,
+            isPassthroughTracked,
+        )
+        DiagLog.certPath(
+            action = "passthrough-getKeyEntry",
+            reason = if (isPassthroughTracked) "real_tee" else "real-keystore-unmodified",
+            trustClass = label.trustClass.name,
+            trustClassReason = label.reason,
+        )
     }
 
     private fun safeTypedObjectReply(response: KeyEntryResponse, label: String): Result {
@@ -505,15 +520,56 @@ object Keystore2Interceptor : BaseKeystoreInterceptor() {
                 val cachedKey =
                     descriptor?.let { SecurityLevelInterceptor.resolveKey(callingUid, it) }
                 val hasCachedPatch = cachedKey?.let { SecurityLevelInterceptor.patchedResponses[it] != null } == true
-                when (GetKeyEntryPostPolicy.decide(isPassthrough, hasCachedPatch)) {
+                val hasGeneratedOwner =
+                    descriptor?.let { SecurityLevelInterceptor.findGeneratedKey(callingUid, it) != null } == true
+                val explicitLeafHack = PkgConfig.isExplicitLeafHack(callingUid)
+                val autoPreserveUntrackedReal =
+                    PkgConfig.needHack(callingUid) &&
+                        !PkgConfig.needGenerate(callingUid) &&
+                        !explicitLeafHack
+                val postInput =
+                    GetKeyEntryPostPolicy.PostHookInput(
+                        isPassthroughTracked = isPassthrough,
+                        hasCachedPatch = hasCachedPatch,
+                        hasGeneratedOwner = hasGeneratedOwner,
+                        explicitLeafHack = explicitLeafHack,
+                        autoPreserveUntrackedReal = autoPreserveUntrackedReal,
+                    )
+                val postAction = GetKeyEntryPostPolicy.decide(postInput)
+                val postTrust =
+                    TrustClassMapping.forGetKeyEntryPostAction(
+                        postAction,
+                        isPassthrough,
+                        hasGeneratedOwner,
+                    )
+                when (postAction) {
                     GetKeyEntryPostPolicy.Action.PASSTHROUGH_UNMODIFIED -> {
-                        logPassthroughGetKeyEntryHit(callingUid, descriptor!!)
+                        logPassthroughGetKeyEntryHit(callingUid, descriptor!!, isPassthrough)
                         return Skip
                     }
                     GetKeyEntryPostPolicy.Action.SERVE_CACHED_PATCH -> {
-                        return createTypedObjectReply(SecurityLevelInterceptor.patchedResponses[cachedKey!!]!!)
+                        val ownedResponse =
+                            cachedKey?.let { SecurityLevelInterceptor.patchedResponses[it] }
+                                ?: descriptor?.let {
+                                    SecurityLevelInterceptor.findGeneratedKey(callingUid, it)?.response
+                                }
+                        if (ownedResponse != null) {
+                            DiagLog.certPath(
+                                action = "serve-cached-patch",
+                                reason = if (hasGeneratedOwner) "generated-owner" else "patch-owner",
+                                trustClass = postTrust.trustClass.name,
+                                trustClassReason = postTrust.reason,
+                            )
+                            return createTypedObjectReply(ownedResponse)
+                        }
                     }
                     GetKeyEntryPostPolicy.Action.PATCH_LEAF -> {
+                        DiagLog.certPath(
+                            action = "patch-leaf",
+                            reason = "explicit-leaf-forward",
+                            trustClass = postTrust.trustClass.name,
+                            trustClassReason = postTrust.reason,
+                        )
                         val replyStart = reply.dataPosition()
                         reply.readException()
                         val response = reply.readTypedObject(KeyEntryResponse.CREATOR)

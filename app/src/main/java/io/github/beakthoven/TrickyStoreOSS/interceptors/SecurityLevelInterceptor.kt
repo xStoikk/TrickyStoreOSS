@@ -764,6 +764,13 @@ class SecurityLevelInterceptor(private val original: IKeystoreSecurityLevel, pri
             explicitSynthetic = needGenerate,
             hasAttestKeyPurpose = hasAttestKeyPurpose,
         )
+        val trustLabel =
+            TrustClassMapping.forGenerateKeyRoute(
+                selected = selected,
+                forceForge = forceForge,
+                explicitLeafHack = PkgConfig.isExplicitLeafHack(callingUid),
+                explicitGenerate = PkgConfig.isExplicitGenerate(callingUid),
+            )
         DiagLog.modeRouting(
             callingUid = callingUid,
             packages = packages,
@@ -776,6 +783,8 @@ class SecurityLevelInterceptor(private val original: IKeystoreSecurityLevel, pri
             hasAttestationChallenge = hasAttestationChallenge,
             forceForge = forceForge,
             selected = selected,
+            trustClass = trustLabel.trustClass.name,
+            trustClassReason = trustLabel.reason,
         )
     }
 }

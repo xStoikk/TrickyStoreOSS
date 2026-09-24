@@ -205,6 +205,9 @@ object PkgConfig {
     /** True when any resolved package for [callingUid] uses explicit leaf mode (`?` in target.txt). */
     fun isExplicitLeafHack(callingUid: Int): Boolean = hasTargetMode(callingUid, Mode.LEAF_HACK)
 
+    /** True when any resolved package for [callingUid] uses explicit generate mode (`!` in target.txt). */
+    fun isExplicitGenerate(callingUid: Int): Boolean = hasTargetMode(callingUid, Mode.GENERATE)
+
     private fun hasTargetMode(callingUid: Int, mode: Mode): Boolean {
         val packages = uidPackages[callingUid] ?: return false
         return packages.any { packageModes[it] == mode }
