@@ -10,29 +10,112 @@ import java.util.zip.ZipFile
 
 plugins { alias(libs.plugins.android.application) }
 
-val gitCommitCount =
-    providers
-        .exec {
-            commandLine("git", "rev-list", "HEAD", "--count")
-            workingDir = rootDir
-        }
-        .standardOutput
-        .asText
-        .map { it.trim().toInt() }
-        .get()
-
-val gitCommitHash =
-    providers
-        .exec {
-            commandLine("git", "rev-parse", "--verify", "--short", "HEAD")
-            workingDir = rootDir
-        }
-        .standardOutput
-        .asText
-        .map { it.trim() }
-        .get()
-
+/** Product version string (module packaging + runtime diagnostics). */
 val verName = "v3.1.6-auto-tee-passthrough"
+
+/** Runtime architecture milestone embedded in BUILD_ID; not incremented for build-only phases. */
+val teeBuildPhase = "4C"
+
+val gitCommitCountProvider =
+    providers.exec {
+        commandLine("git", "rev-list", "HEAD", "--count")
+        workingDir = rootDir
+        isIgnoreExitValue = true
+    }.standardOutput.asText.map { it.trim().toIntOrNull() ?: 0 }
+
+val gitCommitHashProvider =
+    providers.exec {
+        commandLine("git", "rev-parse", "--short=7", "HEAD")
+        workingDir = rootDir
+        isIgnoreExitValue = true
+    }.standardOutput.asText.map { it.trim().ifBlank { "unknown" } }
+
+val gitDirtyTreeProvider =
+    providers.exec {
+        commandLine("git", "diff-index", "--quiet", "HEAD", "--")
+        workingDir = rootDir
+        isIgnoreExitValue = true
+    }.result.map { it.exitValue != 0 }
+
+/** HEAD short SHA for packaging (module.prop / ZIP); never includes -dirty suffix. */
+val gitCommitHash = gitCommitHashProvider.get()
+
+val gitCommitCount = gitCommitCountProvider.get()
+
+/** TeeBuildInfo.GIT: short SHA, plus -dirty when tracked files differ from HEAD. */
+val teeBuildInfoGitProvider =
+    gitCommitHashProvider.zip(gitDirtyTreeProvider) { hash, dirty ->
+        when {
+            hash == "unknown" -> "unknown"
+            dirty -> "$hash-dirty"
+            else -> hash
+        }
+    }
+
+val teeBuildInfoOutputRelativePath =
+    "generated/source/teeBuildInfo/kotlin/io/github/beakthoven/TrickyStoreOSS/tee/TeeBuildInfo.kt"
+
+tasks.register("generateTeeBuildInfo") {
+    val outputFile = layout.buildDirectory.file(teeBuildInfoOutputRelativePath)
+    val gitRevision = teeBuildInfoGitProvider
+    val productVersion = verName
+    val runtimePhase = teeBuildPhase
+
+    inputs.property("gitRevision", gitRevision)
+    inputs.property("productVersion", productVersion)
+    inputs.property("runtimePhase", runtimePhase)
+    outputs.file(outputFile)
+
+    doLast {
+        val git = gitRevision.get()
+        if (git == "unknown") {
+            logger.warn("generateTeeBuildInfo: git unavailable; TeeBuildInfo.GIT=unknown")
+        }
+        val out = outputFile.get().asFile
+        out.parentFile.mkdirs()
+        out.writeText(
+            """
+            /*
+             * GENERATED FILE — do not edit.
+             * Produced by the generateTeeBuildInfo Gradle task.
+             */
+
+            package io.github.beakthoven.TrickyStoreOSS.tee
+
+            object TeeBuildInfo {
+                const val VERSION = "$productVersion"
+                const val GIT = "$git"
+                const val PHASE = "$runtimePhase"
+                const val BUILD_ID = "version=${'$'}VERSION git=${'$'}GIT phase=${'$'}PHASE"
+            }
+            """
+                .trimIndent() + "\n",
+        )
+    }
+}
+
+tasks.register("verifyTeeBuildInfoGit") {
+    dependsOn("generateTeeBuildInfo")
+    val outputFile = layout.buildDirectory.file(teeBuildInfoOutputRelativePath)
+    val expectedGit = teeBuildInfoGitProvider
+
+    inputs.file(outputFile)
+    inputs.property("expectedGit", expectedGit)
+
+    doLast {
+        val content = outputFile.get().asFile.readText()
+        val embedded =
+            Regex("""const val GIT = "([^"]+)"""")
+                .find(content)
+                ?.groupValues
+                ?.get(1)
+                ?: error("verifyTeeBuildInfoGit: GIT constant missing from generated TeeBuildInfo.kt")
+        val expected = expectedGit.get()
+        check(embedded == expected) {
+            "verifyTeeBuildInfoGit: embedded GIT=$embedded expected $expected"
+        }
+    }
+}
 
 android {
     namespace = "io.github.beakthoven.TrickyStoreOSS"
@@ -86,6 +169,13 @@ android {
     testOptions {
         unitTests.isIncludeAndroidResources = false
     }
+    sourceSets.named("main") {
+        kotlin.srcDir("$projectDir/build/generated/source/teeBuildInfo/kotlin")
+    }
+}
+
+tasks.named("preBuild").configure {
+    dependsOn("generateTeeBuildInfo", "verifyTeeBuildInfoGit")
 }
 
 dependencies {
