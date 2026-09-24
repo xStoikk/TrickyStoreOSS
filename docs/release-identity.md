@@ -1,6 +1,6 @@
 # Fork release identity
 
-Canonical fork: **xStoikk/TrickyStoreOSS**  
+Canonical fork: **xStoikk/TrickyStoreOSS**
 Upstream: **beakthoven/TrickyStoreOSS** (fetch-only)
 
 Phase 7C documents identity without changing Java/Kotlin package names or publishing a release.
