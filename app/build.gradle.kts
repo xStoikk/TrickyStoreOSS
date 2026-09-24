@@ -202,6 +202,13 @@ androidComponents {
 
             outputs.dir(stageDirProvider)
 
+            if (isDebugVariant) {
+                dependsOn("package${capitalized}")
+            } else {
+                dependsOn("minify${capitalized}WithR8")
+            }
+            dependsOn("strip${capitalized}DebugSymbols")
+
             doLast {
                 val stageDir = stageDirProvider.get().asFile
                 stageDir.deleteRecursively()
