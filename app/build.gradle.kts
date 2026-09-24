@@ -168,6 +168,7 @@ android {
     packaging { resources { pickFirsts += setOf("META-INF/LICENSE.md", "META-INF/NOTICE.md", "META-INF/INDEX.LIST") } }
     testOptions {
         unitTests.isIncludeAndroidResources = false
+        unitTests.isReturnDefaultValues = true
     }
     sourceSets.named("main") {
         kotlin.srcDir("$projectDir/build/generated/source/teeBuildInfo/kotlin")
@@ -184,6 +185,7 @@ dependencies {
     implementation(libs.org.bouncycastle.bcpkix.jdk18on)
     implementation(libs.org.lsposed.libcxx.libcxx)
     testImplementation("junit:junit:4.13.2")
+    testImplementation(project(":stub"))
 }
 
 androidComponents {

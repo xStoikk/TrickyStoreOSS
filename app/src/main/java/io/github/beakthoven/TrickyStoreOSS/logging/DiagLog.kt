@@ -32,17 +32,23 @@ object DiagLog {
     }
 
     private fun emit(line: String) {
-        android.util.Log.i(TAG, "$PREFIX $line")
-        if (SystemProperties.get("init.svc.logd", "") != "running") {
-            System.err.println("$PREFIX $line")
+        val formatted = "$PREFIX $line"
+        runCatching {
+            android.util.Log.i(TAG, formatted)
+            if (SystemProperties.get("init.svc.logd", "") != "running") {
+                System.err.println(formatted)
+            }
+        }.onFailure {
+            System.err.println(formatted)
         }
     }
 
-    fun bootContext(): String {
-        val uptime = SystemClock.elapsedRealtime()
-        val bootCompleted = SystemProperties.get("sys.boot_completed", "unknown")
-        return "uptime_ms=$uptime boot_completed=$bootCompleted"
-    }
+    fun bootContext(): String =
+        runCatching {
+            val uptime = SystemClock.elapsedRealtime()
+            val bootCompleted = SystemProperties.get("sys.boot_completed", "unknown")
+            "uptime_ms=$uptime boot_completed=$bootCompleted"
+        }.getOrDefault("uptime_ms=unknown boot_completed=unknown")
 
     fun buildId() {
         emit("BUILD_ID ${TeeBuildInfo.BUILD_ID}")
@@ -191,6 +197,10 @@ object DiagLog {
 
     fun passthroughTrack(event: String, uid: Int, aliasHash: String) {
         emit("PASSTHROUGH_TRACK $event uid=$uid alias_hash=$aliasHash ${bootContext()}")
+    }
+
+    fun certStateClear(uid: Int, aliasHash: String, reason: String) {
+        emit("CERT_STATE_CLEAR uid=$uid alias_hash=$aliasHash reason=$reason")
     }
 
     private fun formatExceptionChain(e: Throwable, prefix: String = "TEE_PROBE_EXCEPTION"): List<String> {

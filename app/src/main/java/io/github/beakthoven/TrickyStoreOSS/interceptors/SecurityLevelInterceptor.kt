@@ -43,6 +43,12 @@ import java.util.concurrent.locks.LockSupport
 
 private const val MAX_ATTESTATION_CHALLENGE_BYTES = 128
 
+private typealias Key = CertificateAliasCache.Key
+
+private typealias Info = CertificateAliasCache.Info
+
+private typealias GrantInfo = CertificateAliasCache.GrantInfo
+
 class SecurityLevelInterceptor(private val original: IKeystoreSecurityLevel, private val level: Int) :
     BinderInterceptor() {
     override val interceptedCodes: IntArray by lazy {
@@ -67,126 +73,77 @@ class SecurityLevelInterceptor(private val original: IKeystoreSecurityLevel, pri
 
         private val secureRandom = SecureRandom()
 
-        @Keep val keys = ConcurrentHashMap<Key, Info>()
+        val keys get() = CertificateAliasCache.keys
 
-        @Keep val keyPairs = ConcurrentHashMap<Key, Pair<KeyPair, List<Certificate>>>()
+        val keyPairs get() = CertificateAliasCache.keyPairs
 
-        @Keep val skipLeafHacks = ConcurrentHashMap<Key, Boolean>()
+        val skipLeafHacks get() = CertificateAliasCache.skipLeafHacks
 
-        @Keep val keysByNspace = ConcurrentHashMap<Long, Key>()
+        val keysByNspace get() = CertificateAliasCache.keysByNspace
 
-        @Keep val patchedResponses = ConcurrentHashMap<Key, KeyEntryResponse>()
+        val patchedResponses get() = CertificateAliasCache.patchedResponses
 
-        @Keep fun isPassthroughKey(key: Key): Boolean =
-            PassthroughKeyRegistry.isTracked(PassthroughKeyRegistry.KeyId(key.uid, key.alias))
+        val grants get() = CertificateAliasCache.grants
 
-        @Keep
-        fun isPassthroughDescriptor(uid: Int, descriptor: KeyDescriptor): Boolean {
-            if (PassthroughKeyRegistry.isTracked(uid, descriptor)) return true
-            return resolveOwnerKeys(uid, descriptor).any { isPassthroughKey(it) }
-        }
+        val usageRemaining get() = CertificateAliasCache.usageRemaining
 
-        @Keep fun getKeyPairs(uid: Int, alias: String): Pair<KeyPair, List<Certificate>>? = keyPairs[Key(uid, alias)]
+        @Keep fun isPassthroughKey(key: Key): Boolean = CertificateAliasCache.isPassthroughKey(key)
 
         @Keep
-        fun findAliasForNspace(uid: Int, nspace: Long): String? {
-            val key = keysByNspace[nspace]?.takeIf { it.uid == uid } ?: return null
-            return key.alias
-        }
+        fun isPassthroughDescriptor(uid: Int, descriptor: KeyDescriptor): Boolean =
+            CertificateAliasCache.isPassthroughDescriptor(uid, descriptor)
 
-        private fun resolveOwnerKeys(uid: Int, descriptor: KeyDescriptor): List<Key> {
-            val candidates = ArrayList<Key>(3)
-            if (descriptor.nspace != 0L) {
-                keysByNspace[descriptor.nspace]?.takeIf { it.uid == uid }?.let { candidates.add(it) }
-                grants[descriptor.nspace]?.takeIf { it.granteeUid == uid }?.let { candidates.add(it.key) }
-            }
-            descriptor.alias?.let { candidates.add(Key(uid, it)) }
-            return candidates
-        }
+        @Keep
+        fun getKeyPairs(uid: Int, alias: String): Pair<KeyPair, List<Certificate>>? =
+            CertificateAliasCache.getKeyPairs(uid, alias)
+
+        @Keep fun findAliasForNspace(uid: Int, nspace: Long): String? = CertificateAliasCache.findAliasForNspace(uid, nspace)
 
         @Keep
         fun findGeneratedKey(uid: Int, descriptor: KeyDescriptor): Info? =
-            resolveOwnerKeys(uid, descriptor).firstNotNullOfOrNull { keys[it] }
+            CertificateAliasCache.findGeneratedKey(uid, descriptor)
 
         @Keep
         fun resolvePatchedResponse(uid: Int, descriptor: KeyDescriptor): KeyEntryResponse? =
-            resolveOwnerKeys(uid, descriptor).firstNotNullOfOrNull { patchedResponses[it] }
+            CertificateAliasCache.resolvePatchedResponse(uid, descriptor)
 
-        @Keep fun isPatchedKey(key: Key): Boolean = keys.containsKey(key) || patchedResponses.containsKey(key)
+        @Keep fun isPatchedKey(key: Key): Boolean = CertificateAliasCache.isPatchedKey(key)
 
         @Keep
         fun shouldSkipLeafHackFor(uid: Int, descriptor: KeyDescriptor): Boolean =
-            resolveOwnerKeys(uid, descriptor).firstNotNullOfOrNull { skipLeafHacks[it] } ?: false
+            CertificateAliasCache.shouldSkipLeafHackFor(uid, descriptor)
 
-        @Keep val grants = ConcurrentHashMap<Long, GrantInfo>()
-
-        @Keep
-        fun resolveKey(uid: Int, descriptor: KeyDescriptor): Key? {
-            if (descriptor.nspace != 0L) {
-                keysByNspace[descriptor.nspace]
-                    ?.takeIf { it.uid == uid }
-                    ?.let {
-                        return it
-                    }
-            }
-            return descriptor.alias?.let { Key(uid, it) }
-        }
+        @Keep fun resolveKey(uid: Int, descriptor: KeyDescriptor): Key? = CertificateAliasCache.resolveKey(uid, descriptor)
 
         @Keep
         fun updateKeyCertChain(key: Key, publicCert: ByteArray?, certificateChain: ByteArray?) {
-            keys[key]?.let {
-                it.response.metadata.certificate = publicCert
-                it.response.metadata.certificateChain = certificateChain
-            }
-            patchedResponses[key]?.metadata?.let {
-                it.certificate = publicCert
-                it.certificateChain = certificateChain
-            }
-            skipLeafHacks.remove(key)
-        }
-
-        @Keep val usageRemaining = ConcurrentHashMap<Key, Int>()
-
-        @Keep
-        fun cleanupKey(uid: Int, alias: String) {
-            val k = Key(uid, alias)
-            keys[k]?.response?.metadata?.key?.nspace?.let { keysByNspace.remove(it) }
-            keys.remove(k)
-            keyPairs.remove(k)
-            skipLeafHacks.remove(k)
-            patchedResponses.remove(k)
-            PassthroughKeyRegistry.remove(uid, alias)
-            DiagLog.passthroughTrack("remove", uid, PassthroughKeyRegistry.aliasHash(alias))
-            usageRemaining.remove(k)
-            grants.values.removeIf { it.key == k }
-            CertificateHack.leafAlgorithms.remove(CertificateHack.KeyIdentifier(alias, uid))
-            PersistenceManager.deleteKey(uid, alias)
+            CertificateAliasCache.updateKeyCertChain(key, publicCert, certificateChain)
         }
 
         @Keep
-        fun cleanupAll() {
-            keys.clear()
-            keyPairs.clear()
-            skipLeafHacks.clear()
-            PassthroughKeyRegistry.clear()
-            patchedResponses.clear()
-            keysByNspace.clear()
-            usageRemaining.clear()
-            grants.clear()
-            PersistenceManager.clearAll()
-        }
+        fun clearSyntheticCertificateState(
+            uid: Int,
+            alias: String,
+            reason: String,
+            includePersistence: Boolean = false,
+        ) = CertificateAliasCache.clearSyntheticCertificateState(uid, alias, reason, includePersistence)
+
+        @Keep
+        fun relinquishPassthroughOwnership(uid: Int, alias: String, reason: String) =
+            CertificateAliasCache.relinquishPassthroughOwnership(uid, alias, reason)
+
+        @Keep
+        fun invalidateCertificateResponseState(
+            uid: Int,
+            alias: String,
+            reason: String,
+            removePassthrough: Boolean = true,
+        ) = CertificateAliasCache.invalidateCertificateResponseState(uid, alias, reason, removePassthrough)
+
+        @Keep fun cleanupKey(uid: Int, alias: String) = CertificateAliasCache.cleanupKey(uid, alias)
+
+        @Keep fun cleanupAll() = CertificateAliasCache.cleanupAll()
     }
-
-    data class Key(val uid: Int, val alias: String)
-
-    data class Info(
-        val keyPair: KeyPair?,
-        val secretKey: javax.crypto.SecretKey?,
-        val response: KeyEntryResponse,
-        val params: CertificateGen.KeyGenParameters,
-    )
-
-    data class GrantInfo(val ownerUid: Int, val granteeUid: Int, val key: Key, val accessVector: Int = 0)
 
     override fun onPreTransact(
         target: IBinder,
@@ -350,7 +307,11 @@ class SecurityLevelInterceptor(private val original: IKeystoreSecurityLevel, pri
                         val routeKey = Key(callingUid, keyDescriptor.alias)
                         if (GenerateKeyRoute.isPassthroughRoute(selectedRoute)) {
                             pendingPassthroughKeys[routeKey] = true
-                            patchedResponses.remove(routeKey)
+                            clearSyntheticCertificateState(
+                                callingUid,
+                                keyDescriptor.alias,
+                                "transition-to-passthrough:pre",
+                            )
                             DiagLog.passthroughTrack(
                                 "add",
                                 callingUid,
@@ -488,6 +449,12 @@ class SecurityLevelInterceptor(private val original: IKeystoreSecurityLevel, pri
                     }
                     reply.readException()
                     val metadata = reply.readTypedObject(KeyMetadata.CREATOR)
+                    clearSyntheticCertificateState(
+                        callingUid,
+                        keyDescriptor.alias,
+                        "transition-to-passthrough:post",
+                        includePersistence = true,
+                    )
                     metadata?.key?.nspace?.let { nspace ->
                         if (nspace != 0L) keysByNspace[nspace] = routeKey
                     }
@@ -519,6 +486,16 @@ class SecurityLevelInterceptor(private val original: IKeystoreSecurityLevel, pri
                         val rest = metadata.certificateChain?.toCertificates() ?: emptyList()
                         (listOf<Certificate>(leaf) + rest).toTypedArray()
                     }
+                relinquishPassthroughOwnership(
+                    callingUid,
+                    keyDescriptor.alias,
+                    "transition-to-leaf-forward",
+                )
+                clearSyntheticCertificateState(
+                    callingUid,
+                    keyDescriptor.alias,
+                    "transition-to-leaf-forward:pre",
+                )
                 val patched = CertificateHack.hackCertificateChain(chain, callingUid)
                 metadata.putCertificateChain(patched).getOrThrow()
                 metadata.authorizations = CertificateHack.patchAuthorizations(metadata.authorizations, callingUid)
@@ -561,6 +538,8 @@ class SecurityLevelInterceptor(private val original: IKeystoreSecurityLevel, pri
         skipLeafHack: Boolean,
         startNanos: Long,
     ): Result {
+        relinquishPassthroughOwnership(callingUid, keyDescriptor.alias, "transition-to-generate")
+        clearSyntheticCertificateState(callingUid, keyDescriptor.alias, "transition-to-generate:pre")
         keyDescriptor.nspace = secureRandom.nextLong()
         val key = Key(callingUid, keyDescriptor.alias)
         keysByNspace[keyDescriptor.nspace] = key

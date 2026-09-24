@@ -191,7 +191,7 @@ private class KeyAgreementEngine(private val agreement: KeyAgreement) : OpEngine
 internal class SoftwareOperationBinder
 private constructor(
     private val engine: OpEngine,
-    private val usageKey: SecurityLevelInterceptor.Key?,
+    private val usageKey: CertificateAliasCache.Key?,
     private val usageCountLimit: Int,
 ) : IKeystoreOperation.Stub() {
     @Volatile private var active = true
@@ -275,9 +275,9 @@ private constructor(
 
     companion object {
         fun create(
-            info: SecurityLevelInterceptor.Info,
+            info: CertificateAliasCache.Info,
             op: OpRequest,
-            usageKey: SecurityLevelInterceptor.Key?,
+            usageKey: CertificateAliasCache.Key?,
         ): SoftwareOperationBinder {
             val p = info.params
             val purpose =
@@ -395,7 +395,7 @@ private constructor(
             digest: Int,
             padding: Int?,
             blockMode: Int?,
-            info: SecurityLevelInterceptor.Info,
+            info: CertificateAliasCache.Info,
             purpose: Int,
         ): Cipher {
             val keyAlgo =

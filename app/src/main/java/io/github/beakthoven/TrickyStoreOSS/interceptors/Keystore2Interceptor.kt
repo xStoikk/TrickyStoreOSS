@@ -118,7 +118,7 @@ object Keystore2Interceptor : BaseKeystoreInterceptor() {
                 if (keyDescriptor != null) {
                     val alias = keyDescriptor.alias
                     if (alias != null) {
-                        val key = SecurityLevelInterceptor.Key(callingUid, alias)
+                        val key = CertificateAliasCache.Key(callingUid, alias)
                         val isSoftware =
                             SecurityLevelInterceptor.keys.containsKey(key) &&
                                 !SecurityLevelInterceptor.skipLeafHacks.containsKey(key)
@@ -161,10 +161,15 @@ object Keystore2Interceptor : BaseKeystoreInterceptor() {
                     return@runCatching successReply()
                 }
                 if (key != null) {
-                    // real keys keep the update in the real keystore — drop the cached response
-                    // so the next read re-hacks the new chain instead of replaying the stale one
-                    SecurityLevelInterceptor.patchedResponses.remove(key)
-                    SecurityLevelInterceptor.skipLeafHacks.remove(key)
+                    // real keys keep the update in the real keystore — drop cached cert responses
+                    // before forward so getKeyEntry cannot replay stale synthetic/patched data
+                    // while the TEE update is in flight; passthrough ownership clears on success
+                    CertificateAliasCache.invalidateCertificateResponseState(
+                        callingUid,
+                        key.alias,
+                        "updateSubcomponent:pre",
+                        removePassthrough = false,
+                    )
                     Logger.i("updateSubcomponent: forwarded, cache dropped uid=$callingUid alias=${key.alias}")
                 } else {
                     Logger.i("updateSubcomponent: could not resolve alias for nspace=${keyDescriptor.nspace}")
@@ -199,7 +204,7 @@ object Keystore2Interceptor : BaseKeystoreInterceptor() {
                         } else {
                             val id = java.security.SecureRandom().nextLong()
                             SecurityLevelInterceptor.grants[id] =
-                                SecurityLevelInterceptor.GrantInfo(callingUid, granteeUid, key, accessVector)
+                                CertificateAliasCache.GrantInfo(callingUid, granteeUid, key, accessVector)
                             id
                         }
                     val grantDescriptor = KeyDescriptor()
@@ -282,6 +287,10 @@ object Keystore2Interceptor : BaseKeystoreInterceptor() {
                 }
                 when {
                     PkgConfig.needGenerate(callingUid) -> {
+                        if (SecurityLevelInterceptor.isPassthroughDescriptor(callingUid, descriptor)) {
+                            Logger.d("getKeyEntry: passthrough bypass pre uid=$callingUid alias=$aliasLabel")
+                            Continue
+                        }
                         // forwarded (non-forged) keys only live in patchedResponses — serve that
                         // cache too, or APP-domain reads diverge from GRANT-domain reads after
                         // updateSubcomponent
@@ -448,9 +457,12 @@ object Keystore2Interceptor : BaseKeystoreInterceptor() {
                         keyDescriptor.alias
                             ?: SecurityLevelInterceptor.findAliasForNspace(callingUid, keyDescriptor.nspace)
                     if (alias != null) {
-                        val k = SecurityLevelInterceptor.Key(callingUid, alias)
-                        SecurityLevelInterceptor.patchedResponses.remove(k)
-                        SecurityLevelInterceptor.skipLeafHacks.remove(k)
+                        CertificateAliasCache.invalidateCertificateResponseState(
+                            callingUid,
+                            alias,
+                            "updateSubcomponent:post",
+                            removePassthrough = true,
+                        )
                         Logger.i(
                             "Invalidated cached response for uid=$callingUid alias=$alias after updateSubcomponent"
                         )
@@ -472,7 +484,7 @@ object Keystore2Interceptor : BaseKeystoreInterceptor() {
                 val key = SecurityLevelInterceptor.resolveKey(callingUid, keyDescriptor) ?: return@runCatching
                 if (!SecurityLevelInterceptor.isPatchedKey(key)) return@runCatching
                 SecurityLevelInterceptor.grants[grantDescriptor.nspace] =
-                    SecurityLevelInterceptor.GrantInfo(callingUid, granteeUid, key, accessVector)
+                    CertificateAliasCache.GrantInfo(callingUid, granteeUid, key, accessVector)
                 Logger.i("grant: tracked real grantId=${grantDescriptor.nspace} alias=${key.alias} grantee=$granteeUid")
             }
             raw.onFailure { Logger.e("grant post-hook tracking failed", it) }
