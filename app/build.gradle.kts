@@ -11,7 +11,9 @@ import java.util.zip.ZipFile
 plugins { alias(libs.plugins.android.application) }
 
 /** Product version string (module packaging + runtime diagnostics). */
-val verName = "v3.1.6-auto-tee-passthrough"
+val verName =
+    providers.gradleProperty("trickyStoreVersionName").orNull?.takeIf { it.isNotBlank() }
+        ?: error("trickyStoreVersionName is not set in gradle.properties")
 
 /** Runtime architecture milestone embedded in BUILD_ID; not incremented for build-only phases. */
 val teeBuildPhase = "4C"

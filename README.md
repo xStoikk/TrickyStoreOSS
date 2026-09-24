@@ -98,6 +98,8 @@ com.google.android.gms!             # explicit software-synthetic
 
 **Release validation (local):** `pwsh scripts/validate-release.ps1` — same Gradle gates as CI; requires clean git tree.
 
+**Release prep (dry-run):** `pwsh scripts/prepare-release.ps1` — validation + `out/release-prep/` manifest; no publish. `-Tag` only after product version is authorized.
+
 ### `security_patch.txt`
 
 Optional. Lives at `/data/adb/tricky_store/security_patch.txt`. It sets the three patch levels a spoofed attestation reports: `osPatchLevel` (system), `vendorPatchLevel`, and `bootPatchLevel`. It only changes KeyAttestation output, not system properties. Changes apply on save, so no reboot is needed.

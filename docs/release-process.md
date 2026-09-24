@@ -1,95 +1,141 @@
 # Release process (design)
 
-Phase 7B defines mechanics; **automatic publishing is not enabled** on the xStoikk fork until explicitly authorized.
+Canonical fork: **xStoikk/TrickyStoreOSS**. Automatic publishing is **not enabled** until explicitly authorized.
 
-## Current state
+## Current automation state
 
-| Component | Behavior on `xStoikk/TrickyStoreOSS` |
-|-----------|----------------------------------------|
-| `Build` workflow | Push/PR to `main` — full acceptance gate, uploads CI artifacts |
-| `Release` workflow | **Inert** — inherited from upstream but job guard skips publishing |
-| `changelogs.yml` | **Inert** — no `update.json` / `changelog.md` commits on fork |
-| Local cut | `scripts/validate-release.ps1` |
+| Component | xStoikk fork behavior |
+|-----------|----------------------|
+| `Build` workflow | Full acceptance gate; CI artifacts on green builds |
+| `Release` workflow | **Inert** — `github.repository == 'beakthoven/TrickyStoreOSS'` guard |
+| `changelogs.yml` | **Inert** — same guard |
+| Local validation | `pwsh scripts/validate-release.ps1` |
+| Release prep (dry-run) | `pwsh scripts/prepare-release.ps1` (no `-Tag` until product version authorized) |
 
-**Upstream release automation is intentionally inert on the xStoikk fork until the fork release workflow is explicitly enabled.**
+**Upstream release automation is intentionally inert on the xStoikk fork until fork release workflow is explicitly enabled.**
 
-Inherited workflows remain in the repository for upstream compatibility and future fork adaptation. Jobs run only when:
+## Protected `main` ruleset (active)
 
-```yaml
-github.repository == 'beakthoven/TrickyStoreOSS'
-```
+Ruleset: **Protect main** (default branch)
 
-On the fork:
+| Rule | Setting |
+|------|---------|
+| Restrict deletions | On |
+| Block force pushes | On |
+| Require linear history | On |
+| Require status check **`build`** | On |
+| Require branches up to date | Off |
+| Require signed commits | Off |
+| Require pull request | Off |
+| Bypass actors | None |
 
-- Pushing a `v*` tag **does not** create a GitHub Release
-- Editing a release **does not** trigger metadata commits to `main` / `changelog`
-- Later fork release work must deliberately replace or remove this guard
+### Exact-SHA merge flow
 
-Do **not** push `v*` tags on the fork expecting safe no-ops without these guards (now present as of Phase 7B-FINAL).
+Because linear history is required and PR-merge commits are not used:
+
+1. Work on feature branch
+2. Open PR (optional but recommended for review) — **Build must pass** on PR head
+3. Fast-forward validated commit SHA onto `main` (not a merge commit)
+4. Push updated `main`
+
+Direct pushes to `main` remain possible today (PR not required), but force-push and deletion are blocked.
 
 ## CI trigger policy (`Build` workflow)
 
-`paths-ignore` on push/PR to `main`:
+| Event | paths-ignore | Build runs when |
+|-------|--------------|-----------------|
+| **push** → `main` | `**.md`, `update.json` | Any non-doc, non-update.json change |
+| **pull_request** → `main` | *(none)* | **Always** — required for branch protection |
+| **workflow_dispatch** | — | Always |
 
-```yaml
-- '**.md'
-- 'update.json'
-```
+Docs-only or `update.json`-only **pushes** may skip CI. **All PRs** run Build regardless of changed paths.
 
-| Change | Build runs? |
-|--------|-------------|
-| App source / tests | Yes |
-| Gradle / build files | Yes |
-| `scripts/**` | Yes |
-| `.github/workflows/**` | Yes — workflows are **not** ignored |
-| Docs-only (`*.md`) | No (may skip) |
-| `update.json` only | No (may skip) |
+## Acceptance before release
 
-**Note:** GitHub `paths-ignore` supports exclusions only. Re-inclusion via `!.github/workflows/**` under `paths-ignore` is not reliable. The fork uses a minimal ignore list so workflow edits always run CI.
+See [release-validation.md](release-validation.md).
 
-## Acceptance before any release
+1. Clean tree on **protected `main`** (or exact SHA fast-forwarded to main)
+2. `pwsh scripts/validate-release.ps1`
+3. `pwsh scripts/prepare-release.ps1` — post-7C acceptance **without `-Tag`**
+4. After product version bump: `pwsh scripts/prepare-release.ps1 -Tag <tag>` where **tag == product version**
 
-See [release-validation.md](release-validation.md). CI and local script enforce the same Gradle gates.
+Output: `out/release-prep/` (cleared each run; stale `update.json.next` removed when `-Tag` omitted).
 
-Run `pwsh scripts/validate-release.ps1` **after** committing Phase work (requires clean tree).
+### Tag / product coherence
 
-## Future manual release workflow (proposed)
+`-Tag` must match packaged product version from Release ZIP `module.prop`. Mismatch fails nonzero with no override.
 
-**Trigger:** `workflow_dispatch` only (not tag push auto-publish).
+### First public fork release
 
-**Inputs:** version, optional versionCode override, prerelease flag.
-
-**Steps (future):** validate → build exact commit → hash artifacts → draft GitHub release → attach Release ZIP → deliberate `update.json` update.
-
-Do **not** implement fork publishing in Phase 7B.
+See [release-identity.md](release-identity.md) steps A–H. First public release ships with xStoikk `updateJson` and fork `update.json` already describing that release before publish.
 
 ## Version metadata
 
-| Field | Source |
-|-------|--------|
-| `verName` | `app/build.gradle.kts` — manual authorization to change |
-| `versionCode` / ZIP count segment | `git rev-list HEAD --count` — auto-increments per commit |
-| `TeeBuildInfo.GIT` | short SHA (+ `-dirty` if tree dirty at build time) |
+| Field | Build input | Release prep truth (after validate) |
+|-------|-------------|-----------------------------------|
+| Product version | `gradle.properties` → `trickyStoreVersionName` | Packaged `module.prop` in Release ZIP |
+| versionCode / ZIP count segment | `git rev-list HEAD --count` | Packaged `module.prop` |
+| TeeBuildInfo.GIT | short SHA (+ `-dirty` if dirty at build) | Git HEAD at prep time |
+| TeeBuildInfo.PHASE | `teeBuildPhase` in `app/build.gradle.kts` | Generated `TeeBuildInfo.kt` `PHASE` |
 
-After Phase 7B commit: expect versionCode **189** (was **188** pre-commit). This is expected — not a manual version bump. Keep `v3.1.6-auto-tee-passthrough` until authorized.
+Changing `trickyStoreVersionName` requires maintainer authorization.
 
 ## Tag policy
 
-| Tag pattern | Purpose |
-|-------------|---------|
-| `phase*-accepted` | Engineering checkpoint tags |
-| `v*` | Reserved future public-release namespace; inherited publishing automation is **fork-disabled** on xStoikk |
+| Pattern | Purpose |
+|---------|---------|
+| `phase*-accepted` | Engineering checkpoint |
+| `v*` | Future public release namespace; **fork publishing disabled** via upstream guards |
 
-Phase tags ≠ public release tags. Do not rename historical phase tags.
+## update.json ownership (future)
 
-## Branch policy
+See [release-identity.md](release-identity.md) steps A–H. Summary:
 
-| Branch | Role |
-|--------|------|
-| `main` | Accepted development line |
-| `chore/*`, `fix/*`, `research/*` | Phase and fix work |
-| PRs | Merge to `main` after green `Build` workflow |
+1. `prepare-release.ps1 -Tag` produces **candidate** `out/release-prep/update.json.next`
+2. Draft GitHub Release + upload validated ZIP
+3. Commit tracked `update.json` via protected `main` (green Build) **before** publishing release
+4. Verify raw fork feed, then publish draft release
+5. No automation may push to `main` while bypass actors are absent
 
-## update.json
+Tracked `update.json` today still references **upstream** — intentional until first public fork cutover.
 
-Currently references upstream release URL (`beakthoven/TrickyStoreOSS`). Fork releases must update version, versionCode, zipUrl, and changelog URL deliberately — not via inherited changelog automation while guards are active.
+## update.json / versionCode risk (installed fork build)
+
+Installed fork module.prop points at upstream `updateJson`. Tracked upstream feed: `v3.1.0`, versionCode **172**.
+
+Fork builds use versionCode = **git commit count** (191+ on current main).
+
+| Question | Assessment |
+|----------|------------|
+| Upstream versionCode older than fork? | **Yes** today (172 ≪ 191) |
+| Upstream versionCode could exceed fork later? | **Yes** if upstream history diverges and uses its own count |
+| Fork install offered upstream module as update? | **Possible** — depends on module manager comparing remote versionCode to installed (KernelSU / manager behavior — **verify externally**) |
+| Git count safe forever across fork+upstream? | **Risk** — independent histories can invert ordering; consider epoch offset before public feed cutover |
+
+**Recommendation (not final):** keep git count for development; evaluate **`100000 + commitCount`** before enabling xStoikk update feed. Public releases only from protected `main`.
+
+## Future fork release workflow (design only)
+
+File: `.github/workflows/release-fork.yml` *(not implemented in Phase 7C)*
+
+**Trigger:** `workflow_dispatch`
+**Inputs:** `tag`, `prerelease`, `draft`
+
+Flow:
+
+1. Checkout selected ref
+2. Full six-gate Gradle build + artifact discovery
+3. Run prepare-release metadata logic
+4. Verify tag/version compatibility
+5. Create **draft** GitHub Release; upload Release ZIP
+6. Optional provenance attestation
+7. **Stop** — no `update.json` mutation
+8. Maintainer verifies draft; separate metadata PR after publish
+
+Do not add `contents: write` to ordinary Build workflow.
+
+## Related docs
+
+- [release-identity.md](release-identity.md)
+- [release-validation.md](release-validation.md)
+- [upstream-sync.md](upstream-sync.md)

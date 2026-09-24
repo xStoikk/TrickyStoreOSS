@@ -2,14 +2,15 @@
 
 Acceptance checklist for Tricky Store OSS module releases.
 
-## Automated enforcement (Phase 7B)
+## Automated enforcement
 
 | Environment | Mechanism |
 |-------------|-----------|
-| **GitHub Actions** | `.github/workflows/build.yml` — full Gradle suite on push/PR to `main` |
-| **Local (Windows)** | `pwsh scripts/validate-release.ps1` |
+| **GitHub Actions** | `.github/workflows/build.yml` |
+| **Local validation** | `pwsh scripts/validate-release.ps1` |
+| **Release prep (dry-run)** | `pwsh scripts/prepare-release.ps1` (no `-Tag` until product version authorized) |
 
-Both enforce:
+Gradle gates (CI and local validator):
 
 ```text
 testDebugUnitTest
@@ -20,83 +21,58 @@ verifyDebugModuleContents
 lintRelease
 ```
 
-Local script additionally requires a **clean git tree** and runs `clean` first.
+Local validator additionally:
 
-### Verifier redundancy
+- requires **clean git tree**
+- runs `clean` first
+- clears `out/` before build (mirrors CI)
 
-`assembleRelease` / `assembleDebug` already `finalizedBy` `verify*ModuleContents` via Gradle. CI lists verifiers **explicitly** as a human-readable release contract — redundant but intentional.
+Explicit verifier tasks in CI are **redundant** with `assemble*` `finalizedBy` but declare the release contract intentionally.
 
 ## SOURCE
 
-- [ ] Clean git tree (`git status` shows no uncommitted changes)
-- [ ] Known commit SHA recorded in release notes / tag
-- [ ] `TeeBuildInfo.GIT` matches commit short SHA in built artifact
-- [ ] Version metadata reviewed (see [release-process.md](release-process.md))
+- [ ] Clean git tree
+- [ ] Known commit SHA recorded
+- [ ] `TeeBuildInfo.GIT` matches packaged short SHA
+- [ ] `trickyStoreVersionName` in `gradle.properties` reviewed
 
-## TEST
+## TEST / BUILD / ZIP
 
-- [ ] All unit tests pass (baseline: 142+)
-- [ ] No routing-behavior test regressions without documented contract change
-
-## BUILD
-
-- [ ] `assembleRelease` PASS
-- [ ] `assembleDebug` PASS
-- [ ] `verifyReleaseModuleContents` PASS
-- [ ] `verifyDebugModuleContents` PASS
-- [ ] `lintRelease` PASS
-
-## ZIP (Release module)
-
-Gradle `verifyReleaseModuleContents` checks:
-
-- [ ] `classes.dex` present at ZIP root
-- [ ] `service.apk` **absent** from Release ZIP
-- [ ] `module.prop` present; variant token (`release`) in content
-- [ ] Exactly **one** Release ZIP in `out/` after build
-
-Gradle `verifyDebugModuleContents` checks:
-
-- [ ] `service.apk` present
-- [ ] `classes.dex` absent (no Release/Debug staging leak)
+See Phase 7A checklist items — baseline **142+** unit tests.
 
 ZIP naming: `Tricky-Store-OSS-{verName}-{commitCount}-{shortSha}-{Variant}.zip`
 
-Additional layout checks (19 files / 9 dirs / 28 entries) are enforced indirectly by stable packaging tasks; extend Gradle verifier if stricter counts become required.
-
-## DEVICE (manual smoke — not CI-gated)
-
-Optional but recommended before publishing — see Phase 7A device section.
-
-## PRODUCTION
-
-- [ ] No claims of DEVICE/STRONG spoofing in release notes
-- [ ] No automatic artifact publish without maintainer review
-- [ ] Tag annotated when shipping
-
-## CI artifact discovery
-
-CI clears `out/` before build and **fails** if Release or Debug ZIP count ≠ 1.
+`versionCode` equals `git rev-list HEAD --count` at build commit.
 
 ## CI trigger policy
 
-`Build` workflow `paths-ignore` (push/PR to `main`):
+| Event | Skips CI when |
+|-------|----------------|
+| **push** → `main` | Only `**.md` or `update.json` changes |
+| **pull_request** → `main` | **Never** — all PRs run Build (branch protection) |
 
-- `**.md` — docs-only changes may skip CI
-- `update.json` — metadata-only changes may skip CI
+## CI artifact discovery
 
-Everything else runs CI, including:
+CI clears `out/` before Gradle and fails if Release or Debug ZIP count ≠ 1.
 
-- `.github/workflows/build.yml` and all workflow edits (workflows are **not** path-ignored)
-- `scripts/**`
-- application and Gradle sources
+## prepare-release.ps1
 
-GitHub `paths-ignore` is exclusion-only; do not rely on negated re-inclusion patterns.
+Execution order:
+
+1. Clean git tree (fail before any output mutation)
+2. `validate-release.ps1` (clears `out/`, builds artifacts)
+3. Remove stale `out/release-prep/` if present
+4. Write manifest (`schemaVersion: 1`) and summary from **artifact-derived** `module.prop`
+5. With `-Tag`: write `update.json.next` only if Tag == packaged product version
+
+Post-7C acceptance: run **without `-Tag`**. Future `-Tag v3.2.0-oss.1` valid only after `trickyStoreVersionName` bump to same value.
+
+Manifest `generatedAtUtc` is audit metadata; deterministic anchors are ZIP and `classes.dex` SHA256.
 
 ## Fork release safety
 
-Inherited `release.yml` and `changelogs.yml` publish only when `github.repository == 'beakthoven/TrickyStoreOSS'`. On xStoikk/TrickyStoreOSS, `v*` tag pushes do not create releases or mutate `update.json`.
+Inherited `release.yml` / `changelogs.yml` jobs run only on `beakthoven/TrickyStoreOSS`.
 
-## CI alignment
+## Protected main
 
-Phase 7B closes the Phase 7A gap: unit tests + verifiers run in `Build` workflow.
+Require **`build`** status check. See [release-process.md](release-process.md) for linear-history / exact-SHA flow.
