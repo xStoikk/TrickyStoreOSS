@@ -1,28 +1,44 @@
 # Release validation gate
 
-Acceptance checklist for Tricky Store OSS module releases. Phase 7A defines the gate; future phases execute it.
+Acceptance checklist for Tricky Store OSS module releases.
+
+## Automated enforcement (Phase 7B)
+
+| Environment | Mechanism |
+|-------------|-----------|
+| **GitHub Actions** | `.github/workflows/build.yml` — full Gradle suite on push/PR to `main` |
+| **Local (Windows)** | `pwsh scripts/validate-release.ps1` |
+
+Both enforce:
+
+```text
+testDebugUnitTest
+assembleRelease
+assembleDebug
+verifyReleaseModuleContents
+verifyDebugModuleContents
+lintRelease
+```
+
+Local script additionally requires a **clean git tree** and runs `clean` first.
+
+### Verifier redundancy
+
+`assembleRelease` / `assembleDebug` already `finalizedBy` `verify*ModuleContents` via Gradle. CI lists verifiers **explicitly** as a human-readable release contract — redundant but intentional.
 
 ## SOURCE
 
 - [ ] Clean git tree (`git status` shows no uncommitted changes)
 - [ ] Known commit SHA recorded in release notes / tag
 - [ ] `TeeBuildInfo.GIT` matches commit short SHA in built artifact
-- [ ] Version metadata reviewed (see versioning policy — no silent bump without authorization)
+- [ ] Version metadata reviewed (see [release-process.md](release-process.md))
 
 ## TEST
-
-```powershell
-.\gradlew.bat testDebugUnitTest
-```
 
 - [ ] All unit tests pass (baseline: 142+)
 - [ ] No routing-behavior test regressions without documented contract change
 
 ## BUILD
-
-```powershell
-.\gradlew.bat clean assembleRelease assembleDebug verifyReleaseModuleContents verifyDebugModuleContents lintRelease
-```
 
 - [ ] `assembleRelease` PASS
 - [ ] `assembleDebug` PASS
@@ -32,40 +48,55 @@ Acceptance checklist for Tricky Store OSS module releases. Phase 7A defines the 
 
 ## ZIP (Release module)
 
-- [ ] Output under `out/*Release.zip`
-- [ ] **19 files**, **9 directory entries**, **28 total** entries (per verifier)
+Gradle `verifyReleaseModuleContents` checks:
+
 - [ ] `classes.dex` present at ZIP root
-- [ ] `service.apk` **excluded** from Release ZIP
-- [ ] `module.prop` present with substituted version fields
-- [ ] Native libs present: `lib/*/libTrickyStoreOSS.so`, `libinject.so` per ABI
+- [ ] `service.apk` **absent** from Release ZIP
+- [ ] `module.prop` present; variant token (`release`) in content
+- [ ] Exactly **one** Release ZIP in `out/` after build
 
-Record for each release:
+Gradle `verifyDebugModuleContents` checks:
 
-- ZIP path
-- ZIP SHA256 (informational — may vary with timestamps)
-- `classes.dex` SHA256 (should be stable for identical inputs)
+- [ ] `service.apk` present
+- [ ] `classes.dex` absent (no Release/Debug staging leak)
+
+ZIP naming: `Tricky-Store-OSS-{verName}-{commitCount}-{shortSha}-{Variant}.zip`
+
+Additional layout checks (19 files / 9 dirs / 28 entries) are enforced indirectly by stable packaging tasks; extend Gradle verifier if stricter counts become required.
 
 ## DEVICE (manual smoke — not CI-gated)
 
-Optional but recommended before publishing:
-
-- [ ] Module installs on target device / KernelSU
-- [ ] `TS_DIAG BUILD_ID` matches expected git SHA
-- [ ] TEE probe starts (`PROBE_BOOTSTRAP_SUCCESS` or deferred UNKNOWN with retries)
-- [ ] Plain AUTO sanity: `selected=passthrough-real-tee`, `reply_unchanged=true` on untracked real getKeyEntry
-- [ ] Explicit `!` sanity when needed: `selected=generate`, `SOFTWARE_SYNTHETIC`
-- [ ] Return target to AUTO after explicit tests
-
-**Not required:** Play Integrity synthetic testing, GMS modification, root exploit validation.
+Optional but recommended before publishing — see Phase 7A device section.
 
 ## PRODUCTION
 
 - [ ] No claims of DEVICE/STRONG spoofing in release notes
 - [ ] No automatic artifact publish without maintainer review
-- [ ] Tag annotated locally or on remote per release policy
+- [ ] Tag annotated when shipping
 
-## CI alignment (recommended)
+## CI artifact discovery
 
-GitHub Actions should eventually mirror TEST + BUILD sections. Device steps remain manual.
+CI clears `out/` before build and **fails** if Release or Debug ZIP count ≠ 1.
 
-Current gap: `.github/workflows/build.yml` runs `assembleRelease assembleDebug lintRelease` but not `testDebugUnitTest` or module verifiers — see Phase 7A CI audit.
+## CI trigger policy
+
+`Build` workflow `paths-ignore` (push/PR to `main`):
+
+- `**.md` — docs-only changes may skip CI
+- `update.json` — metadata-only changes may skip CI
+
+Everything else runs CI, including:
+
+- `.github/workflows/build.yml` and all workflow edits (workflows are **not** path-ignored)
+- `scripts/**`
+- application and Gradle sources
+
+GitHub `paths-ignore` is exclusion-only; do not rely on negated re-inclusion patterns.
+
+## Fork release safety
+
+Inherited `release.yml` and `changelogs.yml` publish only when `github.repository == 'beakthoven/TrickyStoreOSS'`. On xStoikk/TrickyStoreOSS, `v*` tag pushes do not create releases or mutate `update.json`.
+
+## CI alignment
+
+Phase 7B closes the Phase 7A gap: unit tests + verifiers run in `Build` workflow.

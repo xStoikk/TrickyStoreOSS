@@ -1,5 +1,8 @@
 name: Publish Changelog
 
+# Fork safety: metadata commits run only on beakthoven/TrickyStoreOSS.
+# Inherited on xStoikk/TrickyStoreOSS but inert until fork release policy enables it.
+
 on:
   release:
     types: [edited]
@@ -15,6 +18,7 @@ concurrency:
 
 jobs:
   generate-files:
+    if: github.repository == 'beakthoven/TrickyStoreOSS'
     runs-on: ubuntu-latest
     permissions:
       contents: write

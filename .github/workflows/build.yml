@@ -5,15 +5,11 @@ on:
     branches: [ "main" ]
     paths-ignore:
       - '**.md'
-      - '.github/**'
-      - '!.github/workflows/**'
       - 'update.json'
   pull_request:
     branches: [ "main" ]
     paths-ignore:
       - '**.md'
-      - '.github/**'
-      - '!.github/workflows/**'
       - 'update.json'
   workflow_dispatch:
 
@@ -30,6 +26,9 @@ jobs:
     outputs:
       releaseName: ${{ steps.prepareArtifact.outputs.releaseName }}
       debugName: ${{ steps.prepareArtifact.outputs.debugName }}
+      releaseSha256: ${{ steps.artifactSummary.outputs.releaseSha256 }}
+      debugSha256: ${{ steps.artifactSummary.outputs.debugSha256 }}
+      dexSha256: ${{ steps.artifactSummary.outputs.dexSha256 }}
 
     steps:
       - name: Check out
@@ -56,26 +55,67 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6.3.0
 
+      - name: Clear module ZIP output directory
+        run: rm -rf out
+
       - name: Build with Gradle
-        run: ./gradlew --parallel assembleRelease assembleDebug lintRelease --stacktrace
+        run: |
+          ./gradlew --parallel \
+            testDebugUnitTest \
+            assembleRelease \
+            assembleDebug \
+            verifyReleaseModuleContents \
+            verifyDebugModuleContents \
+            lintRelease \
+            --stacktrace
 
       - name: Prepare artifact
         id: prepareArtifact
         run: |
-          set -e
-          RELEASE_FILE=$(find out -name "*Release*.zip" | head -1)
-          DEBUG_FILE=$(find out -name "*Debug*.zip" | head -1)
+          set -euo pipefail
+          mapfile -t RELEASE_FILES < <(find out -maxdepth 1 -type f -name '*Release*.zip' | sort)
+          mapfile -t DEBUG_FILES < <(find out -maxdepth 1 -type f -name '*Debug*.zip' | sort)
 
-          if [[ -z "$RELEASE_FILE" || -z "$DEBUG_FILE" ]]; then
-            echo "::error::Could not find release or debug files in out/"
-            ls -la out/ || echo "out/ directory does not exist"
+          if [[ ${#RELEASE_FILES[@]} -ne 1 ]]; then
+            echo "::error::Expected exactly 1 Release ZIP in out/; found ${#RELEASE_FILES[@]}"
+            ls -la out/ || true
             exit 1
           fi
+          if [[ ${#DEBUG_FILES[@]} -ne 1 ]]; then
+            echo "::error::Expected exactly 1 Debug ZIP in out/; found ${#DEBUG_FILES[@]}"
+            ls -la out/ || true
+            exit 1
+          fi
+
+          RELEASE_FILE="${RELEASE_FILES[0]}"
+          DEBUG_FILE="${DEBUG_FILES[0]}"
 
           echo "releaseName=$(basename "$RELEASE_FILE" .zip)" >> "$GITHUB_OUTPUT"
           echo "debugName=$(basename "$DEBUG_FILE" .zip)" >> "$GITHUB_OUTPUT"
           echo "releaseFile=$RELEASE_FILE" >> "$GITHUB_OUTPUT"
           echo "debugFile=$DEBUG_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Artifact summary
+        id: artifactSummary
+        run: |
+          set -euo pipefail
+          RELEASE_FILE="${{ steps.prepareArtifact.outputs.releaseFile }}"
+          DEBUG_FILE="${{ steps.prepareArtifact.outputs.debugFile }}"
+
+          RELEASE_SHA=$(sha256sum "$RELEASE_FILE" | awk '{print $1}')
+          DEBUG_SHA=$(sha256sum "$DEBUG_FILE" | awk '{print $1}')
+          DEX_SHA=$(unzip -p "$RELEASE_FILE" classes.dex | sha256sum | awk '{print $1}')
+
+          echo "releaseSha256=$RELEASE_SHA" >> "$GITHUB_OUTPUT"
+          echo "debugSha256=$DEBUG_SHA" >> "$GITHUB_OUTPUT"
+          echo "dexSha256=$DEX_SHA" >> "$GITHUB_OUTPUT"
+
+          echo "## Artifact Hashes" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Release ZIP**: \`${{ steps.prepareArtifact.outputs.releaseName }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Release SHA256**: \`$RELEASE_SHA\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **classes.dex SHA256**: \`$DEX_SHA\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Debug ZIP**: \`${{ steps.prepareArtifact.outputs.debugName }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Debug SHA256**: \`$DEBUG_SHA\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload release
         uses: actions/upload-artifact@v7
@@ -106,7 +146,13 @@ jobs:
         run: |
           echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
           echo "- **Status**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Gradle Tasks**: assembleRelease, assembleDebug, lintRelease" >> $GITHUB_STEP_SUMMARY
+          echo "- **Gates enforced**:" >> $GITHUB_STEP_SUMMARY
+          echo "  - Unit tests (\`testDebugUnitTest\`)" >> $GITHUB_STEP_SUMMARY
+          echo "  - Release build (\`assembleRelease\`)" >> $GITHUB_STEP_SUMMARY
+          echo "  - Debug build (\`assembleDebug\`)" >> $GITHUB_STEP_SUMMARY
+          echo "  - Release module verification (\`verifyReleaseModuleContents\`)" >> $GITHUB_STEP_SUMMARY
+          echo "  - Debug module verification (\`verifyDebugModuleContents\`)" >> $GITHUB_STEP_SUMMARY
+          echo "  - Release lint (\`lintRelease\`)" >> $GITHUB_STEP_SUMMARY
           if [[ "${{ job.status }}" == "success" ]]; then
             echo "- **Release Artifact**: ${{ steps.prepareArtifact.outputs.releaseName }}" >> $GITHUB_STEP_SUMMARY
             echo "- **Debug Artifact**: ${{ steps.prepareArtifact.outputs.debugName }}" >> $GITHUB_STEP_SUMMARY

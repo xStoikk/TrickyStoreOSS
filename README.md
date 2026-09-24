@@ -96,6 +96,8 @@ com.google.android.gms!             # explicit software-synthetic
 
 **Architecture docs:** [attestation routing](docs/attestation-routing.md) · [trust model](docs/trust-model.md) · [upgrading](docs/upgrading.md) · [diagnostics](docs/diagnostics.md)
 
+**Release validation (local):** `pwsh scripts/validate-release.ps1` — same Gradle gates as CI; requires clean git tree.
+
 ### `security_patch.txt`
 
 Optional. Lives at `/data/adb/tricky_store/security_patch.txt`. It sets the three patch levels a spoofed attestation reports: `osPatchLevel` (system), `vendorPatchLevel`, and `bootPatchLevel`. It only changes KeyAttestation output, not system properties. Changes apply on save, so no reboot is needed.

@@ -1,5 +1,8 @@
 name: Release
 
+# Upstream publishing workflow. Fork safety: jobs run only on beakthoven/TrickyStoreOSS.
+# xStoikk/TrickyStoreOSS inherits this file but v* tag pushes do not create releases.
+
 on:
   push:
     tags:
@@ -11,6 +14,7 @@ concurrency:
 
 jobs:
   release:
+    if: github.repository == 'beakthoven/TrickyStoreOSS'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -105,6 +109,7 @@ jobs:
             --notes-file notes.md
 
   publish-changelog:
+    if: github.repository == 'beakthoven/TrickyStoreOSS'
     needs: release
     permissions:
       contents: write
