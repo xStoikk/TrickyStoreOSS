@@ -133,16 +133,18 @@ jobs:
           distribution: temurin
           java-version: 26
 
-      - name: Set up ccache
-        uses: hendrikmuhs/ccache-action@v1.2
-        with:
-          key: ccache-${{ runner.os }}-release-fork
-          restore-keys: |
-            ccache-${{ runner.os }}-release-fork
-            ccache-${{ runner.os }}-
-
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v6.3.0
+
+      - name: Verify clean release checkout
+        run: |
+          set -euo pipefail
+          STATUS=$(git status --porcelain --untracked-files=all)
+          if [[ -n "$STATUS" ]]; then
+            echo "::error::Release checkout is not clean before preparation"
+            printf '%s\n' "$STATUS"
+            exit 1
+          fi
 
       - name: Prepare release metadata and artifacts
         env:
