@@ -316,7 +316,9 @@ object Keystore2Interceptor : BaseKeystoreInterceptor() {
                                 Logger.i("Serving cached patched response for uid=$callingUid alias=$aliasLabel")
                                 safeTypedObjectReply(patched, "patched")
                             } else {
-                                Logger.d("proceeding with leaf hack for uid=$callingUid alias=$aliasLabel")
+                                Logger.d(
+                                    "getKeyEntry: forwarding to real keystore uid=$callingUid alias=$aliasLabel (certificate path pending post-hook)",
+                                )
                                 Continue
                             }
                         }

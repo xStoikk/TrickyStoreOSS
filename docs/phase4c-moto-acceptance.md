@@ -43,6 +43,6 @@ Device: Moto G 2025, Android 16, KernelSU Next, ReZygisk. No PIF, no legacy Tric
 
 ## Known limitations
 
-- Debug log may still emit misleading `"proceeding with leaf hack"` before passthrough post-policy resolves (cosmetic only).
+- **Historical diagnostic note (Phase 4C validation):** Pre-hook debug logs could emit misleading `"proceeding with leaf hack"` even when post-hook `GetKeyEntryPostPolicy` later resolved to passthrough (`CERT_PATH action=passthrough-getKeyEntry reason=real_tee`). The message implied `CertificateHack` would run, but certificate handling is decided only after the real keystore reply. **Phase 5B** (`phase5b-diagnostic-logging-accepted`) replaced that pre-hook line with route-neutral wording (`getKeyEntry: forwarding to real keystore ... (certificate path pending post-hook)`). Actual outcome diagnostics remain post-hook: passthrough via `CERT_PATH action=passthrough-getKeyEntry`, or genuine leaf mutation via `Hacked certificate` when `CertificateHack` executes.
 - No Device Integrity or Strong Integrity work in this phase.
 - Post-checkpoint rebuilds change `module.prop` version suffix (commit count/hash) but preserve `classes.dex` when built from the tagged tree with release-only assembly.
