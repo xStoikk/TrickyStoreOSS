@@ -331,6 +331,7 @@ object Keystore2Interceptor : BaseKeystoreInterceptor() {
                             Continue
                         }
                         if (SecurityLevelInterceptor.shouldSkipLeafHackFor(callingUid, descriptor)) {
+                            // Log tag kept for compatibility; skips explicit hybrid path for passthrough alias.
                             Logger.i("skip leaf hack for uid=$callingUid alias=$aliasLabel")
                             val response = SecurityLevelInterceptor.findGeneratedKey(callingUid, descriptor)?.response
                             if (response != null) {

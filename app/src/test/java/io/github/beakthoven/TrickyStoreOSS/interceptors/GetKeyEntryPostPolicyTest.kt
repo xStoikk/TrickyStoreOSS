@@ -38,7 +38,7 @@ class GetKeyEntryPostPolicyTest {
     }
 
     @Test
-    fun autoWorkingUntrackedRealResponseUsesPassthrough() {
+    fun regression_untrackedAutoMustNotPatch() {
         assertEquals(
             GetKeyEntryPostPolicy.Action.PASSTHROUGH_UNMODIFIED,
             GetKeyEntryPostPolicy.decide(input(autoPreserveUntrackedReal = true)),

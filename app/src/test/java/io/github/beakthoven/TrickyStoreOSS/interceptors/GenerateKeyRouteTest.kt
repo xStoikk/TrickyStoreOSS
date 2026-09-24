@@ -130,7 +130,8 @@ class GenerateKeyRouteTest {
 
     @Test
 
-    fun autoBrokenNeedGenerateUsesGenerate() {
+    /** needGenerate=true reflects explicit `!` on UID, not BROKEN AUTO silent fallback. */
+    fun explicitNeedGenerateForcesGenerateRoute() {
 
         assertTrue(
 
@@ -332,7 +333,7 @@ class GenerateKeyRouteTest {
 
     @Test
 
-    fun autoAttestKeyDescriptorDoesNotForceForge() {
+    fun regression_autoDescriptorMustNotForge() {
 
         assertFalse(
 

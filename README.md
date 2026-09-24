@@ -73,24 +73,28 @@ All config files take effect immediately — no reboot needed after step 1.
 
 ### `target.txt` — mode selection
 
-Tricky Store OSS intercepts attestation-related keystore calls per package. **Automatic mode never silently substitutes software attestation** — it forwards to the real keystore and preserves the genuine result or error.
+Tricky Store OSS intercepts attestation-related keystore calls for listed packages. **Automatic mode never silently substitutes software attestation** — it forwards to the real keystore and preserves the genuine result or error.
 
 Override per package with a suffix:
 
 | Suffix | Behavior |
 |--------|----------|
 | *(none)* | **AUTO** — real keystore forward; no silent software attestation |
-| `?` | Explicit leaf-forward / certificate re-sign (hybrid) |
-| `!` | Explicit software-synthetic compatibility mode (keybox generate) |
+| `?` | Explicit hybrid re-sign (`HYBRID_RE_SIGNED`) |
+| `!` | Explicit software-synthetic (`SOFTWARE_SYNTHETIC`) |
 
-On a device where the TEE probe reports **BROKEN**, plain AUTO still attempts the real hardware keystore and propagates the genuine success or failure. Use `!` only when you explicitly want legacy software-synthetic attestation. Synthetic mode does **not** provide Google hardware-attestation trust.
+On a device where the TEE probe reports **BROKEN**, plain AUTO still attempts the real hardware keystore and propagates the genuine success or failure. Use `!` only when you explicitly want software-synthetic attestation. Synthetic mode does **not** provide Google hardware-attestation trust.
+
+**Shared UID:** Android may assign multiple packages to one UID. TrickyStore aggregates `target.txt` modes at **UID scope** (Binder exposes UID, not package). If any shared package uses `!` or `?`, the whole UID is treated as explicit-capable — not plain AUTO. See [docs/target.txt.md](docs/target.txt.md).
 
 ```
 # target.txt
 com.google.android.gsf              # automatic (real keystore)
-io.github.vvb2060.keyattestation?   # explicit leaf-forward
+io.github.vvb2060.keyattestation?   # explicit hybrid re-sign
 com.google.android.gms!             # explicit software-synthetic
 ```
+
+**Architecture docs:** [attestation routing](docs/attestation-routing.md) · [trust model](docs/trust-model.md) · [upgrading](docs/upgrading.md) · [diagnostics](docs/diagnostics.md)
 
 ### `security_patch.txt`
 

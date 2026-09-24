@@ -57,8 +57,8 @@ class SecurityLevelInterceptor(private val original: IKeystoreSecurityLevel, pri
             .toIntArray()
     }
 
-    // software forges reply faster than real TEE keygen, which timing probes pick up —
-    // pad forged replies to the measured real latency (EMA of forwarded generateKey calls)
+    // Explicit software-synthetic generateKey returns faster than real TEE keygen; timing probes
+    // may detect that — pad synthetic replies toward measured real latency (EMA of passthrough calls).
     @Volatile private var realKeygenEmaMs: Double? = null
     private val pendingKeygenStarts = ConcurrentHashMap<String, Long>()
     private val pendingDeviceIdForwards = ConcurrentHashMap<Key, Boolean>()

@@ -471,7 +471,7 @@ class SharedUidGrantModeAuthorityTest {
 
     @Test
 
-    fun grantOwnerExplicitGenerateGranteePlainAutoWithholdsCache() {
+    fun regression_plainAutoGrantMustNotServeSyntheticOwner() {
 
         seedGenerated(UID_OWNER)
 

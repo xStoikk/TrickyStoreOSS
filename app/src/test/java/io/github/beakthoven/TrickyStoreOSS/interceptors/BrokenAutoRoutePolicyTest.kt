@@ -90,7 +90,7 @@ class BrokenAutoRoutePolicyTest {
     fun tearDown() = setUp()
 
     @Test
-    fun brokenAutoOrdinaryAttestationDoesNotGenerate() {
+    fun regression_brokenAutoMustNotGenerate() {
         assertEquals(
             GenerateKeyRoute.ROUTE_PASSTHROUGH_REAL_TEE,
             PolicySim.selectedRoute(TargetMode.AUTO, teeBroken = true),

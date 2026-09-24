@@ -77,7 +77,7 @@ class CurrentModeAuthorityTest {
         )
 
     @Test
-    fun explicitGenerateOwnerThenAutoGetDoesNotServeGenerated() {
+    fun regression_plainAutoRejectsHistoricalGeneratedOwner() {
         seedGenerated()
         assertTrue(GetKeyEntryCurrentModeAuthority.rejectHistoricalOwners(UID_A, descriptor()))
         assertNull(CertificateAliasCache.findGeneratedKey(UID_A, descriptor()))
@@ -88,7 +88,7 @@ class CurrentModeAuthorityTest {
     }
 
     @Test
-    fun explicitPatchOwnerThenAutoGetDoesNotServePatch() {
+    fun regression_plainAutoRejectsHistoricalPatchedOwner() {
         seedPatched()
         assertTrue(GetKeyEntryCurrentModeAuthority.rejectHistoricalOwners(UID_A, descriptor()))
         assertNull(CertificateAliasCache.resolvePatchedResponse(UID_A, descriptor()))

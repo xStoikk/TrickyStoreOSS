@@ -91,7 +91,8 @@ class AutoAttestKeyCreationCoherenceTest {
     }
 
     @Test
-    fun autoBrokenTeeWithAttestKeyPurposeUsesGenerateFallback() {
+    /** needGenerate=true simulates explicit `!`, not BROKEN AUTO — AUTO never sets needGenerate after Phase 6K. */
+    fun explicitGenerateWithAttestKeyPurposeWhenNeedGenerate() {
         assertTrue(forceForge(needGenerate = true, hasAttestKeyPurpose = true))
         assertEquals(GenerateKeyRoute.ROUTE_GENERATE, autoRoute(hasAttestKeyPurpose = true, needGenerate = true))
     }
