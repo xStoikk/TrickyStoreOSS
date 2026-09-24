@@ -8,9 +8,6 @@ on:
       - 'update.json'
   pull_request:
     branches: [ "main" ]
-    paths-ignore:
-      - '**.md'
-      - 'update.json'
   workflow_dispatch:
 
 concurrency:
