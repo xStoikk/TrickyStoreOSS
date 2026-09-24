@@ -352,6 +352,9 @@ androidComponents {
         val zipTask =
             tasks.register<Zip>("zip${capitalized}") {
                 dependsOn("prepareModuleFiles${capitalized}")
+                // Normalize ZIP entry timestamps and order so same-source release hashes compare meaningfully.
+                isPreserveFileTimestamps = false
+                isReproducibleFileOrder = true
                 archiveFileName.set("Tricky-Store-OSS-$verName-$gitCommitCount-$gitCommitHash-${capitalized}.zip")
                 destinationDirectory.set(rootProject.file("out"))
                 from(tempModuleDir)
