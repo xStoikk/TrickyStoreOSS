@@ -12,6 +12,7 @@ import android.security.KeyStore2
 import android.security.keystore.KeyStoreManager
 import io.github.beakthoven.TrickyStoreOSS.AttestUtils.CachedAttestData
 import io.github.beakthoven.TrickyStoreOSS.config.PkgConfig
+import io.github.beakthoven.TrickyStoreOSS.logging.DiagLog
 import io.github.beakthoven.TrickyStoreOSS.logging.Logger
 import java.io.File
 import java.security.MessageDigest
@@ -63,14 +64,17 @@ object AndroidUtils {
 
     fun setupBootHash() {
         getBootHashFromProp()?.also { Logger.d("Using boot hash from system property: ${it.toHex()}") }
-            ?: getBootHashFromAttestation()?.also {
-                Logger.d("Using boot hash from attestation: ${it.toHex()}")
-                setBootHashProp(it)
-            }
             ?: randomBytes().also {
-                Logger.d("Generating random boot hash: ${it.toHex()}")
+                Logger.d("Generating random boot hash (attestation deferred until TEE is WORKING): ${it.toHex()}")
                 setBootHashProp(it)
             }
+    }
+
+    fun refreshBootHashFromAttestation() {
+        getBootHashFromAttestation()?.also {
+            Logger.d("Refreshing boot hash from attestation: ${it.toHex()}")
+            setBootHashProp(it)
+        }
     }
 
     @OptIn(ExperimentalStdlibApi::class)
@@ -88,10 +92,13 @@ object AndroidUtils {
 
     private fun getBootHashFromAttestation(): ByteArray? {
         return try {
+            DiagLog.setTeeProbeTrigger("refreshBootHash")
             CachedAttestData?.verifiedBootHash?.takeIfNonZero()
         } catch (e: Exception) {
             Logger.e("Failed to get boot hash from attestation: ${e.message}")
             null
+        } finally {
+            DiagLog.clearTeeProbeTrigger()
         }
     }
 

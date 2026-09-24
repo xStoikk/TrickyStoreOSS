@@ -34,6 +34,15 @@
 -keep class org.bouncycastle.jce.provider.** { *; }
 -dontwarn javax.naming.**
 
+# Keep diagnostic logging in release builds
+-keep class io.github.beakthoven.TrickyStoreOSS.logging.DiagLog {
+    *;
+}
+
+-keep class io.github.beakthoven.TrickyStoreOSS.tee.** {
+    *;
+}
+
 # Keep all interceptor classes and their methods - used via reflection and JNI
 -keep class io.github.beakthoven.TrickyStoreOSS.interceptors.** {
     *;

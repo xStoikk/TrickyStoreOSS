@@ -1,0 +1,5 @@
+# Shell/module scripts must stay LF for Android /bin/sh (Magisk/KernelSU installers).
+*.sh text eol=lf
+module/daemon text eol=lf
+module/META-INF/com/google/android/update-binary text eol=lf
+module/META-INF/com/google/android/updater-script text eol=lf

@@ -5,6 +5,9 @@
 
 import com.android.build.api.variant.ApplicationVariant
 
+import java.nio.charset.StandardCharsets
+import java.util.zip.ZipFile
+
 plugins { alias(libs.plugins.android.application) }
 
 val gitCommitCount =
@@ -29,7 +32,7 @@ val gitCommitHash =
         .map { it.trim() }
         .get()
 
-val verName = "v3.1.0"
+val verName = "v3.1.6-auto-tee-passthrough"
 
 android {
     namespace = "io.github.beakthoven.TrickyStoreOSS"
@@ -80,6 +83,9 @@ android {
     }
     buildFeatures { prefab = true }
     packaging { resources { pickFirsts += setOf("META-INF/LICENSE.md", "META-INF/NOTICE.md", "META-INF/INDEX.LIST") } }
+    testOptions {
+        unitTests.isIncludeAndroidResources = false
+    }
 }
 
 dependencies {
@@ -87,35 +93,37 @@ dependencies {
     compileOnly(libs.annotation)
     implementation(libs.org.bouncycastle.bcpkix.jdk18on)
     implementation(libs.org.lsposed.libcxx.libcxx)
+    testImplementation("junit:junit:4.13.2")
 }
 
 androidComponents {
     onVariants { variant: ApplicationVariant ->
         val variantName = variant.name
         val capitalized = variantName.replaceFirstChar { it.uppercase() }
-        val tempModuleDir = project.layout.buildDirectory.dir("tmp/module-${variantName}")
+        val isDebugVariant = variantName.contains("debug", ignoreCase = true)
+        val tempModuleDir = layout.buildDirectory.dir("tmp/module-$variantName")
+        val variantStageDir = layout.buildDirectory.dir("moduleStage/$variantName")
 
         tasks.register("copyFiles${capitalized}") {
-            val moduleFolder = project.rootDir.resolve("module")
-            val buildDir = project.layout.buildDirectory
+            val buildDir = layout.buildDirectory
+            val stageDirProvider = variantStageDir
+
+            outputs.dir(stageDirProvider)
 
             doLast {
-                val isDebug = variantName.contains("debug", ignoreCase = true)
+                val stageDir = stageDirProvider.get().asFile
+                stageDir.deleteRecursively()
+                stageDir.mkdirs()
 
-                listOf("service.apk", "classes.dex").forEach { fileName ->
-                    val oldFile = moduleFolder.resolve(fileName)
-                    if (oldFile.exists()) oldFile.delete()
-                }
-
-                val sourceFile =
-                    if (isDebug) {
+                val buildOutput =
+                    if (isDebugVariant) {
                         buildDir.get().asFile.resolve("outputs/apk/$variantName/app-$variantName.apk")
                     } else {
                         buildDir.get().asFile.resolve("intermediates/dex/release/minifyReleaseWithR8/classes.dex")
                     }
 
-                val destFileName = if (isDebug) "service.apk" else "classes.dex"
-                sourceFile.copyTo(moduleFolder.resolve(destFileName), overwrite = true)
+                val stagedArtifactName = if (isDebugVariant) "service.apk" else "classes.dex"
+                buildOutput.copyTo(stageDir.resolve(stagedArtifactName), overwrite = true)
 
                 val soDir =
                     buildDir
@@ -131,42 +139,73 @@ androidComponents {
                     .filter { it.isFile && it.name in allowedLibs }
                     .forEach { soFile ->
                         val abiFolder = soFile.parentFile.name
-                        val destination = moduleFolder.resolve("lib/$abiFolder/${soFile.name}")
+                        val destination = stageDir.resolve("lib/$abiFolder/${soFile.name}")
+                        destination.parentFile.mkdirs()
                         soFile.copyTo(destination, overwrite = true)
                     }
             }
         }
 
-        // Prepare temp directory with all files
-
         tasks.register("prepareModuleFiles${capitalized}") {
             dependsOn("copyFiles${capitalized}")
-            val sourceDir = project.rootDir.resolve("module")
+            val sourceDir = rootProject.file("module")
             val commitCount = gitCommitCount
             val commitHash = gitCommitHash
             val versionName = verName
             val variant = variantName
             val tempDirProvider = tempModuleDir
+            val stageDirProvider = variantStageDir
+
+            inputs.dir(sourceDir)
+            inputs.dir(stageDirProvider)
+            outputs.dir(tempDirProvider)
 
             doLast {
                 val tempDir = tempDirProvider.get().asFile
-
-                // Clean and create temp directory
                 tempDir.deleteRecursively()
                 tempDir.mkdirs()
 
-                // Copy all files except module.prop
+                val generatedArtifacts = setOf("service.apk", "classes.dex")
+                val generatedPaths = setOf("lib")
                 sourceDir
                     .walkTopDown()
-                    .filter { it.isFile && it.name != "module.prop" }
+                    .filter { file ->
+                        if (!file.isFile || file.name == "module.prop") return@filter false
+                        if (file.name in generatedArtifacts) return@filter false
+                        val relative = sourceDir.toPath().relativize(file.toPath()).toString().replace('\\', '/')
+                        generatedPaths.none { relative == it || relative.startsWith("$it/") }
+                    }
                     .forEach { sourceFile ->
                         val relativePath = sourceFile.relativeTo(sourceDir)
-                        val destFile = tempDir.resolve(relativePath)
+                        val destFile = tempDir.resolve(relativePath.path)
                         destFile.parentFile.mkdirs()
                         sourceFile.copyTo(destFile, overwrite = true)
+                        val normalizedPath = destFile.path.replace('\\', '/')
+                        val isShellScript =
+                            destFile.extension == "sh" ||
+                                destFile.name == "daemon" ||
+                                normalizedPath.endsWith("META-INF/com/google/android/update-binary") ||
+                                normalizedPath.endsWith("META-INF/com/google/android/updater-script")
+                        if (isShellScript) {
+                            val text = destFile.readText(StandardCharsets.UTF_8)
+                            val normalized = text.replace("\r\n", "\n").replace("\r", "\n")
+                            if (text != normalized) destFile.writeText(normalized, StandardCharsets.UTF_8)
+                        }
                     }
 
-                // Process module.prop
+                val stageDir = stageDirProvider.get().asFile
+                if (stageDir.exists()) {
+                    stageDir
+                        .walkTopDown()
+                        .filter { it.isFile }
+                        .forEach { sourceFile ->
+                            val relativePath = stageDir.toPath().relativize(sourceFile.toPath())
+                            val destFile = tempDir.resolve(relativePath.toString())
+                            destFile.parentFile.mkdirs()
+                            sourceFile.copyTo(destFile, overwrite = true)
+                        }
+                }
+
                 val sourceProp = sourceDir.resolve("module.prop")
                 val destProp = tempDir.resolve("module.prop")
                 val content = sourceProp.readText()
@@ -178,14 +217,59 @@ androidComponents {
             }
         }
 
-        // Zip task uses the temp directory
-        tasks.register<Zip>("zip${capitalized}") {
-            dependsOn("prepareModuleFiles${capitalized}")
-            archiveFileName.set("Tricky-Store-OSS-$verName-$gitCommitCount-$gitCommitHash-${capitalized}.zip")
-            destinationDirectory.set(project.rootDir.resolve("out"))
-            from(tempModuleDir)
+        val zipTask =
+            tasks.register<Zip>("zip${capitalized}") {
+                dependsOn("prepareModuleFiles${capitalized}")
+                archiveFileName.set("Tricky-Store-OSS-$verName-$gitCommitCount-$gitCommitHash-${capitalized}.zip")
+                destinationDirectory.set(rootProject.file("out"))
+                from(tempModuleDir)
+            }
+
+        tasks.register("verify${capitalized}ModuleContents") {
+            dependsOn(zipTask)
+            val zipArchive = zipTask.flatMap { it.archiveFile }
+            inputs.file(zipArchive)
+            val expectedVariantToken = variantName.lowercase()
+
+            doLast {
+                val zipFile = zipArchive.get().asFile
+                logger.lifecycle(
+                    "verify${capitalized}ModuleContents: validating ${zipFile.absolutePath}"
+                )
+
+                val names = mutableSetOf<String>()
+                ZipFile(zipFile).use { zip ->
+                    zip.entries().asSequence().forEach { entry ->
+                        if (!entry.isDirectory) names += entry.name
+                    }
+                }
+
+                if (isDebugVariant) {
+                    check("service.apk" in names) { "${zipFile.name} missing Debug service.apk" }
+                    check("classes.dex" !in names) {
+                        "${zipFile.name} must not contain Release classes.dex (Debug/Release staging leak)"
+                    }
+                } else {
+                    check("classes.dex" in names) { "${zipFile.name} missing Release classes.dex" }
+                    check("service.apk" !in names) {
+                        "${zipFile.name} must not contain Debug service.apk (Debug/Release staging leak)"
+                    }
+                }
+
+                val moduleProp =
+                    ZipFile(zipFile).use { zip ->
+                        zip.getEntry("module.prop")?.let { entry ->
+                            zip.getInputStream(entry).bufferedReader().readText()
+                        } ?: error("${zipFile.name} missing module.prop")
+                    }
+                check(moduleProp.contains(expectedVariantToken, ignoreCase = true)) {
+                    "${zipFile.name} module.prop must reference variant '$expectedVariantToken'"
+                }
+            }
         }
 
-        tasks.matching { it.name == "assemble${capitalized}" }.configureEach { finalizedBy("zip${capitalized}") }
+        tasks.matching { it.name == "assemble${capitalized}" }.configureEach {
+            finalizedBy("zip${capitalized}", "verify${capitalized}ModuleContents")
+        }
     }
 }
