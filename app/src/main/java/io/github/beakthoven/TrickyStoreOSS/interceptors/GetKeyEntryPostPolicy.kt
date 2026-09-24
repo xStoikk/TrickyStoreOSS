@@ -24,11 +24,13 @@ object GetKeyEntryPostPolicy {
         val hasGeneratedOwner: Boolean,
         val explicitLeafHack: Boolean,
         val autoPreserveUntrackedReal: Boolean,
+        val plainAutoMode: Boolean = false,
     )
 
     fun decide(input: PostHookInput): Action =
         when {
             input.isPassthroughTracked -> Action.PASSTHROUGH_UNMODIFIED
+            input.plainAutoMode -> Action.PASSTHROUGH_UNMODIFIED
             input.hasCachedPatch || input.hasGeneratedOwner -> Action.SERVE_CACHED_PATCH
             input.explicitLeafHack -> Action.PATCH_LEAF
             input.autoPreserveUntrackedReal -> Action.PASSTHROUGH_UNMODIFIED

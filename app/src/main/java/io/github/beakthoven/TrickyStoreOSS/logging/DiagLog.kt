@@ -154,9 +154,11 @@ object DiagLog {
         attestationKeyDescriptorSet: Boolean,
         explicitSynthetic: Boolean,
         hasAttestKeyPurpose: Boolean = false,
+        teeState: String? = null,
     ) {
+        val teeSuffix = teeState?.let { " teeState=$it" } ?: ""
         emit(
-            "MODE_INPUT attestationKeyDescriptor=${if (attestationKeyDescriptorSet) "set" else "null"} explicitSynthetic=$explicitSynthetic hasAttestKeyPurpose=$hasAttestKeyPurpose",
+            "MODE_INPUT attestationKeyDescriptor=${if (attestationKeyDescriptorSet) "set" else "null"} explicitSynthetic=$explicitSynthetic hasAttestKeyPurpose=$hasAttestKeyPurpose$teeSuffix",
         )
     }
 
@@ -218,9 +220,15 @@ object DiagLog {
         emit("CERT_PATH action=$action reason=$reason$trustSuffix ${bootContext()}")
     }
 
-    fun passthroughResult(callingUid: Int, success: Boolean, replyUnchanged: Boolean) {
+    fun passthroughResult(
+        callingUid: Int,
+        success: Boolean,
+        replyUnchanged: Boolean,
+        reason: String? = null,
+    ) {
+        val reasonSuffix = reason?.let { " reason=$it" } ?: ""
         emit(
-            "PASSTHROUGH_RESULT uid=$callingUid result=${if (success) "success" else "failure"} reply_unchanged=$replyUnchanged ${bootContext()}",
+            "PASSTHROUGH_RESULT uid=$callingUid result=${if (success) "success" else "failure"} reply_unchanged=$replyUnchanged$reasonSuffix ${bootContext()}",
         )
     }
 
@@ -234,6 +242,14 @@ object DiagLog {
 
     fun certStateClear(uid: Int, aliasHash: String, reason: String) {
         emit("CERT_STATE_CLEAR uid=$uid alias_hash=$aliasHash reason=$reason")
+    }
+
+    fun modeScope(uid: Int, packageCount: Int, mixedModes: Boolean) {
+        emit("MODE_SCOPE uid=$uid scope=shared-uid packages=$packageCount mixedModes=$mixedModes")
+    }
+
+    fun certModeAuthority(authority: String, callerUid: Int, ownerUid: Int) {
+        emit("CERT_MODE_AUTHORITY authority=$authority callerUid=$callerUid ownerUid=$ownerUid")
     }
 
     private fun formatExceptionChain(e: Throwable, prefix: String = "TEE_PROBE_EXCEPTION"): List<String> {

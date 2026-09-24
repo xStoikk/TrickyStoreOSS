@@ -15,12 +15,14 @@ class GetKeyEntryPostPolicyTest {
         hasGeneratedOwner: Boolean = false,
         explicitLeafHack: Boolean = false,
         autoPreserveUntrackedReal: Boolean = false,
+        plainAutoMode: Boolean = false,
     ) = GetKeyEntryPostPolicy.PostHookInput(
         isPassthroughTracked = isPassthroughTracked,
         hasCachedPatch = hasCachedPatch,
         hasGeneratedOwner = hasGeneratedOwner,
         explicitLeafHack = explicitLeafHack,
         autoPreserveUntrackedReal = autoPreserveUntrackedReal,
+        plainAutoMode = plainAutoMode,
     )
 
     @Test
@@ -68,21 +70,29 @@ class GetKeyEntryPostPolicyTest {
     }
 
     @Test
-    fun patchedOwnerPreferredOverAutoPassthrough() {
+    fun plainAutoRejectsHistoricalPatchedOwner() {
         assertEquals(
-            GetKeyEntryPostPolicy.Action.SERVE_CACHED_PATCH,
+            GetKeyEntryPostPolicy.Action.PASSTHROUGH_UNMODIFIED,
             GetKeyEntryPostPolicy.decide(
-                input(hasCachedPatch = true, autoPreserveUntrackedReal = true),
+                input(
+                    hasCachedPatch = true,
+                    autoPreserveUntrackedReal = true,
+                    plainAutoMode = true,
+                ),
             ),
         )
     }
 
     @Test
-    fun staleSyntheticGeneratedBlocksAutoUntrackedPassthrough() {
+    fun plainAutoRejectsHistoricalGeneratedOwner() {
         assertEquals(
-            GetKeyEntryPostPolicy.Action.SERVE_CACHED_PATCH,
+            GetKeyEntryPostPolicy.Action.PASSTHROUGH_UNMODIFIED,
             GetKeyEntryPostPolicy.decide(
-                input(hasGeneratedOwner = true, autoPreserveUntrackedReal = true),
+                input(
+                    hasGeneratedOwner = true,
+                    autoPreserveUntrackedReal = true,
+                    plainAutoMode = true,
+                ),
             ),
         )
     }

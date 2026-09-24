@@ -73,21 +73,23 @@ All config files take effect immediately — no reboot needed after step 1.
 
 ### `target.txt` — mode selection
 
-Tricky Store OSS supports two modes: **leaf certificate hacking** and **certificate generation**. On TEE-broken devices, leaf hacking won't work since the leaf certificate can't be retrieved from TEE. The module picks the right mode automatically per device.
+Tricky Store OSS intercepts attestation-related keystore calls per package. **Automatic mode never silently substitutes software attestation** — it forwards to the real keystore and preserves the genuine result or error.
 
 Override per package with a suffix:
 
 | Suffix | Behavior |
 |--------|----------|
-| *(none)* | Automatic mode |
-| `?` | Force leaf hacking |
-| `!` | Force certificate generation |
+| *(none)* | **AUTO** — real keystore forward; no silent software attestation |
+| `?` | Explicit leaf-forward / certificate re-sign (hybrid) |
+| `!` | Explicit software-synthetic compatibility mode (keybox generate) |
+
+On a device where the TEE probe reports **BROKEN**, plain AUTO still attempts the real hardware keystore and propagates the genuine success or failure. Use `!` only when you explicitly want legacy software-synthetic attestation. Synthetic mode does **not** provide Google hardware-attestation trust.
 
 ```
 # target.txt
-com.google.android.gsf              # automatic
-io.github.vvb2060.keyattestation?   # leaf hacking
-com.google.android.gms!             # certificate generation
+com.google.android.gsf              # automatic (real keystore)
+io.github.vvb2060.keyattestation?   # explicit leaf-forward
+com.google.android.gms!             # explicit software-synthetic
 ```
 
 ### `security_patch.txt`

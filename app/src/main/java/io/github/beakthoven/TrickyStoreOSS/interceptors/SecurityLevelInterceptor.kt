@@ -433,7 +433,12 @@ class SecurityLevelInterceptor(private val original: IKeystoreSecurityLevel, pri
                         )
                     }
                     if (isPassthrough) {
-                        DiagLog.passthroughResult(callingUid, success = false, replyUnchanged = true)
+                        DiagLog.passthroughResult(
+                            callingUid,
+                            success = false,
+                            replyUnchanged = true,
+                            reason = "real-keystore-error",
+                        )
                     }
                     return@runCatching null
                 }
@@ -761,8 +766,9 @@ class SecurityLevelInterceptor(private val original: IKeystoreSecurityLevel, pri
         if (!interesting) return
         DiagLog.modeInput(
             attestationKeyDescriptorSet = attestationKeyDescriptorSet,
-            explicitSynthetic = needGenerate,
+            explicitSynthetic = PkgConfig.isExplicitGenerate(callingUid),
             hasAttestKeyPurpose = hasAttestKeyPurpose,
+            teeState = PkgConfig.diagnosticTeeState(),
         )
         val trustLabel =
             TrustClassMapping.forGenerateKeyRoute(
@@ -770,6 +776,7 @@ class SecurityLevelInterceptor(private val original: IKeystoreSecurityLevel, pri
                 forceForge = forceForge,
                 explicitLeafHack = PkgConfig.isExplicitLeafHack(callingUid),
                 explicitGenerate = PkgConfig.isExplicitGenerate(callingUid),
+                teeBroken = PkgConfig.diagnosticTeeBroken(),
             )
         DiagLog.modeRouting(
             callingUid = callingUid,

@@ -43,19 +43,24 @@ object TrustClassMapping {
         forceForge: Boolean,
         explicitLeafHack: Boolean,
         explicitGenerate: Boolean,
+        teeBroken: Boolean? = false,
     ): Label =
         when {
             forceForge || selected == GenerateKeyRoute.ROUTE_GENERATE ->
                 Label(
                     AttestationTrustClass.SOFTWARE_SYNTHETIC,
-                    if (explicitGenerate) "explicit-generate" else "auto-broken-fallback",
+                    if (explicitGenerate) "explicit-generate" else "synthetic-forge",
                 )
             explicitLeafHack ||
                 selected == GenerateKeyRoute.ROUTE_LEAF_FORWARD ||
                 selected == GenerateKeyRoute.ROUTE_LEAF_FORWARD_ATTESTATION ->
                 Label(AttestationTrustClass.HYBRID_RE_SIGNED, "explicit-leaf-forward")
             selected == GenerateKeyRoute.ROUTE_PASSTHROUGH_REAL_TEE ->
-                Label(AttestationTrustClass.HARDWARE_PASSTHROUGH, "tracked-real-tee")
+                if (teeBroken == true) {
+                    Label(AttestationTrustClass.REAL_KEYSTORE_UNMODIFIED, "auto-broken-no-synthetic-fallback")
+                } else {
+                    Label(AttestationTrustClass.HARDWARE_PASSTHROUGH, "tracked-real-tee")
+                }
             selected == GenerateKeyRoute.ROUTE_SKIP ->
                 Label(AttestationTrustClass.UNINTERCEPTED, "skip")
             else -> Label(AttestationTrustClass.UNINTERCEPTED, "unknown-route")
@@ -65,13 +70,17 @@ object TrustClassMapping {
         action: GetKeyEntryPostPolicy.Action,
         isPassthroughTracked: Boolean,
         hasGeneratedOwner: Boolean = false,
+        plainAutoCurrentMode: Boolean = false,
     ): Label =
         when (action) {
             GetKeyEntryPostPolicy.Action.PASSTHROUGH_UNMODIFIED ->
-                if (isPassthroughTracked) {
-                    Label(AttestationTrustClass.HARDWARE_PASSTHROUGH, "tracked-real-tee")
-                } else {
-                    Label(AttestationTrustClass.REAL_KEYSTORE_UNMODIFIED, "auto-untracked-real-response")
+                when {
+                    isPassthroughTracked ->
+                        Label(AttestationTrustClass.HARDWARE_PASSTHROUGH, "tracked-real-tee")
+                    plainAutoCurrentMode ->
+                        Label(AttestationTrustClass.REAL_KEYSTORE_UNMODIFIED, "auto-current-mode-real-response")
+                    else ->
+                        Label(AttestationTrustClass.REAL_KEYSTORE_UNMODIFIED, "auto-untracked-real-response")
                 }
             GetKeyEntryPostPolicy.Action.SERVE_CACHED_PATCH ->
                 if (hasGeneratedOwner) {

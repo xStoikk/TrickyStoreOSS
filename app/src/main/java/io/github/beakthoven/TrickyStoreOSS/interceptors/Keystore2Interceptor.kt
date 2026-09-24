@@ -279,8 +279,22 @@ object Keystore2Interceptor : BaseKeystoreInterceptor() {
                             SecurityLevelInterceptor.keys[grant.key]?.response
                                 ?: SecurityLevelInterceptor.patchedResponses[grant.key]
                         if (response != null) {
-                            Logger.d("getKeyEntry: serving grant alias=${grant.key.alias} grantee=$callingUid")
-                            return@runCatching safeTypedObjectReply(response, "grant")
+                            if (
+                                GetKeyEntryCurrentModeAuthority.shouldServeGrantCachedResponse(
+                                    PkgConfig.isPlainAuto(callingUid),
+                                )
+                            ) {
+                                Logger.d("getKeyEntry: serving grant alias=${grant.key.alias} grantee=$callingUid")
+                                return@runCatching safeTypedObjectReply(response, "grant")
+                            }
+                            DiagLog.certModeAuthority(
+                                authority = "grant-withhold-plain-auto",
+                                callerUid = callingUid,
+                                ownerUid = grant.ownerUid,
+                            )
+                            Logger.d(
+                                "getKeyEntry: grant cache withheld plain AUTO grantee=$callingUid owner=${grant.ownerUid}",
+                            )
                         }
                         Logger.d("getKeyEntry: grant ${descriptor.nspace} has no cache, falling through")
                     }
@@ -307,6 +321,13 @@ object Keystore2Interceptor : BaseKeystoreInterceptor() {
                     PkgConfig.needHack(callingUid) -> {
                         if (SecurityLevelInterceptor.isPassthroughDescriptor(callingUid, descriptor)) {
                             Logger.d("getKeyEntry: passthrough bypass pre uid=$callingUid alias=$aliasLabel")
+                            Continue
+                        }
+                        if (PkgConfig.isPlainAuto(callingUid)) {
+                            GetKeyEntryCurrentModeAuthority.rejectHistoricalOwners(callingUid, descriptor)
+                            Logger.d(
+                                "getKeyEntry: plain AUTO forward to real keystore uid=$callingUid alias=$aliasLabel",
+                            )
                             Continue
                         }
                         if (SecurityLevelInterceptor.shouldSkipLeafHackFor(callingUid, descriptor)) {
@@ -360,7 +381,12 @@ object Keystore2Interceptor : BaseKeystoreInterceptor() {
         return Skip
     }
 
-    private fun logPassthroughGetKeyEntryHit(uid: Int, descriptor: KeyDescriptor, isPassthroughTracked: Boolean) {
+    private fun logPassthroughGetKeyEntryHit(
+        uid: Int,
+        descriptor: KeyDescriptor,
+        isPassthroughTracked: Boolean,
+        plainAutoMode: Boolean = false,
+    ) {
         val alias =
             descriptor.alias ?: SecurityLevelInterceptor.findAliasForNspace(uid, descriptor.nspace)
         val aliasHash = PassthroughKeyRegistry.aliasHash(alias)
@@ -373,10 +399,16 @@ object Keystore2Interceptor : BaseKeystoreInterceptor() {
         val label = TrustClassMapping.forGetKeyEntryPostAction(
             GetKeyEntryPostPolicy.Action.PASSTHROUGH_UNMODIFIED,
             isPassthroughTracked,
+            plainAutoCurrentMode = plainAutoMode && !isPassthroughTracked,
         )
         DiagLog.certPath(
             action = "passthrough-getKeyEntry",
-            reason = if (isPassthroughTracked) "real_tee" else "real-keystore-unmodified",
+            reason =
+                when {
+                    isPassthroughTracked -> "real_tee"
+                    plainAutoMode -> "real-keystore-unmodified"
+                    else -> "real-keystore-unmodified"
+                },
             trustClass = label.trustClass.name,
             trustClassReason = label.reason,
         )
@@ -523,6 +555,7 @@ object Keystore2Interceptor : BaseKeystoreInterceptor() {
                 val hasGeneratedOwner =
                     descriptor?.let { SecurityLevelInterceptor.findGeneratedKey(callingUid, it) != null } == true
                 val explicitLeafHack = PkgConfig.isExplicitLeafHack(callingUid)
+                val plainAutoMode = PkgConfig.isPlainAuto(callingUid)
                 val autoPreserveUntrackedReal =
                     PkgConfig.needHack(callingUid) &&
                         !PkgConfig.needGenerate(callingUid) &&
@@ -534,6 +567,7 @@ object Keystore2Interceptor : BaseKeystoreInterceptor() {
                         hasGeneratedOwner = hasGeneratedOwner,
                         explicitLeafHack = explicitLeafHack,
                         autoPreserveUntrackedReal = autoPreserveUntrackedReal,
+                        plainAutoMode = plainAutoMode,
                     )
                 val postAction = GetKeyEntryPostPolicy.decide(postInput)
                 val postTrust =
@@ -541,10 +575,16 @@ object Keystore2Interceptor : BaseKeystoreInterceptor() {
                         postAction,
                         isPassthrough,
                         hasGeneratedOwner,
+                        plainAutoCurrentMode = plainAutoMode && !isPassthrough,
                     )
                 when (postAction) {
                     GetKeyEntryPostPolicy.Action.PASSTHROUGH_UNMODIFIED -> {
-                        logPassthroughGetKeyEntryHit(callingUid, descriptor!!, isPassthrough)
+                        logPassthroughGetKeyEntryHit(
+                            callingUid,
+                            descriptor!!,
+                            isPassthrough,
+                            plainAutoMode = plainAutoMode,
+                        )
                         return Skip
                     }
                     GetKeyEntryPostPolicy.Action.SERVE_CACHED_PATCH -> {

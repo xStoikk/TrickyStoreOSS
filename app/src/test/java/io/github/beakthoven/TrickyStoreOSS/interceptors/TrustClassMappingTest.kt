@@ -36,16 +36,17 @@ class TrustClassMappingTest {
     }
 
     @Test
-    fun autoBrokenFallbackMapsSoftwareSynthetic() {
+    fun brokenAutoPassthroughMapsRealKeystoreUnmodified() {
         val label =
             TrustClassMapping.forGenerateKeyRoute(
-                selected = GenerateKeyRoute.ROUTE_GENERATE,
-                forceForge = true,
+                selected = GenerateKeyRoute.ROUTE_PASSTHROUGH_REAL_TEE,
+                forceForge = false,
                 explicitLeafHack = false,
                 explicitGenerate = false,
+                teeBroken = true,
             )
-        assertEquals(AttestationTrustClass.SOFTWARE_SYNTHETIC, label.trustClass)
-        assertEquals("auto-broken-fallback", label.reason)
+        assertEquals(AttestationTrustClass.REAL_KEYSTORE_UNMODIFIED, label.trustClass)
+        assertEquals("auto-broken-no-synthetic-fallback", label.reason)
     }
 
     @Test
@@ -81,6 +82,18 @@ class TrustClassMappingTest {
             )
         assertEquals(AttestationTrustClass.REAL_KEYSTORE_UNMODIFIED, label.trustClass)
         assertEquals("auto-untracked-real-response", label.reason)
+    }
+
+    @Test
+    fun plainAutoCurrentModeGetKeyEntryMapsCurrentModeReason() {
+        val label =
+            TrustClassMapping.forGetKeyEntryPostAction(
+                GetKeyEntryPostPolicy.Action.PASSTHROUGH_UNMODIFIED,
+                isPassthroughTracked = false,
+                plainAutoCurrentMode = true,
+            )
+        assertEquals(AttestationTrustClass.REAL_KEYSTORE_UNMODIFIED, label.trustClass)
+        assertEquals("auto-current-mode-real-response", label.reason)
     }
 
     @Test

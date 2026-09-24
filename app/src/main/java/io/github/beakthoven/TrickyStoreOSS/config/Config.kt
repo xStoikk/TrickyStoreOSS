@@ -29,6 +29,8 @@ object PkgConfig {
     // UID-package set cache
     private val uidPackages = ConcurrentHashMap<Int, Array<String>>()
 
+    private val modeScopeLogged = ConcurrentHashMap.newKeySet<Int>()
+
     enum class Mode {
         AUTO,
         LEAF_HACK,
@@ -176,6 +178,19 @@ object PkgConfig {
         }
     }
 
+    private fun diagnosticLogModeScope(callingUid: Int) {
+        if (!modeScopeLogged.add(callingUid)) return
+        val packages = uidPackages[callingUid] ?: return
+        if (packages.size <= 1) return
+        val modes = packages.mapNotNull { packageModes[it] }.toSet()
+        if (modes.isEmpty()) return
+        val hasAuto = Mode.AUTO in modes
+        val hasGenerate = Mode.GENERATE in modes
+        val hasLeaf = Mode.LEAF_HACK in modes
+        val mixed = (hasAuto && (hasGenerate || hasLeaf)) || (hasGenerate && hasLeaf)
+        if (mixed) DiagLog.modeScope(callingUid, packages.size, mixedModes = true)
+    }
+
     private fun checkNeed(callingUid: Int, targetMode: Mode, autoPredicate: Boolean): Boolean {
         val raw = runCatching {
             val ps =
@@ -184,6 +199,7 @@ object PkgConfig {
                     getPm()?.getPackagesForUid(callingUid) ?: return false
                 }
             if (teeBroken == null) storeTEEStatus(root)
+            diagnosticLogModeScope(callingUid)
             for (pkg in ps) {
                 when (packageModes[pkg]) {
                     targetMode -> return true
@@ -202,11 +218,28 @@ object PkgConfig {
     fun needGenerate(callingUid: Int): Boolean =
         checkNeed(callingUid, Mode.GENERATE, TeeProbeClassifier.autoGenerateAllowed(teeBroken))
 
+    /** Read-only tee capability snapshot for diagnostics (Phase 6K). */
+    fun diagnosticTeeBroken(): Boolean? = teeBroken
+
+    fun diagnosticTeeState(): String =
+        when (teeBroken) {
+            true -> "BROKEN"
+            false -> "WORKING"
+            null -> "UNKNOWN"
+        }
+
     /** True when any resolved package for [callingUid] uses explicit leaf mode (`?` in target.txt). */
     fun isExplicitLeafHack(callingUid: Int): Boolean = hasTargetMode(callingUid, Mode.LEAF_HACK)
 
     /** True when any resolved package for [callingUid] uses explicit generate mode (`!` in target.txt). */
     fun isExplicitGenerate(callingUid: Int): Boolean = hasTargetMode(callingUid, Mode.GENERATE)
+
+    /** Plain AUTO target without explicit `!` or `?` suffix (Phase 6K-FINAL). */
+    fun isPlainAuto(callingUid: Int): Boolean {
+        if (isExplicitGenerate(callingUid) || isExplicitLeafHack(callingUid)) return false
+        val packages = uidPackages[callingUid] ?: return false
+        return packages.any { packageModes[it] == Mode.AUTO }
+    }
 
     private fun hasTargetMode(callingUid: Int, mode: Mode): Boolean {
         val packages = uidPackages[callingUid] ?: return false

@@ -65,9 +65,11 @@ object TeeProbeClassifier {
         }
     }
 
-    fun autoGenerateAllowed(teeBroken: Boolean?): Boolean = teeBroken == true
+    /** AUTO never acquires synthetic intent from teeBroken alone (Phase 6K). */
+    fun autoGenerateAllowed(teeBroken: Boolean?): Boolean = false
 
-    fun autoLeafHackAllowed(teeBroken: Boolean?): Boolean = teeBroken != true
+    /** AUTO keeps real-keystore interception regardless of tee capability (Phase 6K). */
+    fun autoLeafHackAllowed(teeBroken: Boolean?): Boolean = true
 
     private data class ProbeSignals(val messages: List<String>, val errorCodes: List<Int>)
 

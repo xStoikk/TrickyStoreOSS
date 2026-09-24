@@ -177,9 +177,9 @@ class TeeProbeClassifierTest {
     }
 
     @Test
-    fun brokenEnablesGenerateAndDisablesAutoLeaf() {
-        assertTrue(TeeProbeClassifier.autoGenerateAllowed(true))
-        assertFalse(TeeProbeClassifier.autoLeafHackAllowed(true))
+    fun brokenAutoDoesNotEnableSyntheticGenerateOrDisableRealKeystoreIntercept() {
+        assertFalse(TeeProbeClassifier.autoGenerateAllowed(true))
+        assertTrue(TeeProbeClassifier.autoLeafHackAllowed(true))
     }
 
     @Test

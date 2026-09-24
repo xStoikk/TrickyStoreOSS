@@ -19,8 +19,7 @@ object GenerateKeyRoute {
     /**
      * True when TrickyStore must synthesize a key locally instead of forwarding to real KeyMint.
      *
-     * Only explicit synthetic intent forces forge: generate mode (`!` in target.txt) or AUTO when
-     * [needGenerate] is true because teeBroken fallback applies. Request shape — device-ID tags
+     * Only explicit synthetic intent forces forge: generate mode (`!` in target.txt). Request shape — device-ID tags
      * (Phase 3C), [KeyPurpose.ATTEST_KEY] (Phase 6F-FINAL), or an attestation-key descriptor
      * (Phase 6F) — does not imply forge for AUTO with a usable TEE.
      */
