@@ -181,6 +181,28 @@ jobs:
           [[ "$UPDATE_JSON" == "$FORK_FEED" ]] || { echo "::error::packagedUpdateJson mismatch"; exit 1; }
           [[ -f "out/$RELEASE_ZIP" ]] || { echo "::error::Release ZIP missing: out/$RELEASE_ZIP"; exit 1; }
 
+          NOTES=out/release-prep/release-notes.md
+          if [[ ! -s "$NOTES" ]]; then
+            echo "::error::release-notes.md missing or empty"
+            exit 1
+          fi
+          if grep -qi 'Do not publish' "$NOTES"; then
+            echo "::error::release-notes.md contains publication-gate wording: Do not publish"
+            exit 1
+          fi
+          if grep -qi 'not published' "$NOTES"; then
+            echo "::error::release-notes.md contains publication-gate wording: not published"
+            exit 1
+          fi
+          if grep -qi 'update feed has not yet been committed' "$NOTES"; then
+            echo "::error::release-notes.md contains publication-gate wording: update feed has not yet been committed"
+            exit 1
+          fi
+          if grep -qi '^DRAFT' "$NOTES"; then
+            echo "::error::release-notes.md begins with draft banner token"
+            exit 1
+          fi
+
           echo "releaseZip=$RELEASE_ZIP" >> "$GITHUB_OUTPUT"
         id: manifest
 
@@ -189,15 +211,6 @@ jobs:
         with:
           subject-path: out/${{ steps.manifest.outputs.releaseZip }}
           subject-name: ${{ inputs.tag }}
-
-      - name: Compose draft release notes
-        run: |
-          set -euo pipefail
-          {
-            echo "**DRAFT — update feed has not yet been committed. Do not publish until update.json metadata PR is merged and verified.**"
-            echo
-            cat out/release-prep/release-summary.md
-          } > /tmp/release-notes.md
 
       - name: Create draft GitHub Release
         env:
@@ -217,7 +230,7 @@ jobs:
             --title "$TAG" \
             --draft \
             $PRERELEASE_FLAG \
-            --notes-file /tmp/release-notes.md \
+            --notes-file out/release-prep/release-notes.md \
             "out/$RELEASE_ZIP" \
             out/release-prep/release-manifest.json \
             out/release-prep/update.json.next \
@@ -228,6 +241,16 @@ jobs:
           TAG: ${{ inputs.tag }}
           RELEASE_ZIP: ${{ steps.manifest.outputs.releaseZip }}
         run: |
-          echo "Draft release created for tag $TAG at $RELEASE_SHA"
-          echo "Attached Release ZIP: $RELEASE_ZIP"
-          echo "update.json.next attached — not committed to main"
+          set -euo pipefail
+          {
+            echo "## Draft release created"
+            echo
+            echo "- Tag: \`$TAG\`"
+            echo "- Commit: \`$RELEASE_SHA\`"
+            echo "- Attached Release ZIP: \`$RELEASE_ZIP\`"
+            echo "- update.json.next attached but not committed automatically"
+            echo
+            echo "### PUBLICATION GATE"
+            echo
+            echo "Do not publish until update.json/changelog metadata has been merged to protected main and verified."
+          } >> "$GITHUB_STEP_SUMMARY"
