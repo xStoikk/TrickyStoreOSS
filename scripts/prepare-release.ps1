@@ -162,6 +162,14 @@ Write-Step 'Git tree'
 # 2. Clean tree before any output mutation.
 Assert-CleanGitTree
 $branch = git branch --show-current
+if ([string]::IsNullOrWhiteSpace($branch)) {
+    if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_REF_NAME)) {
+        $branch = $env:GITHUB_REF_NAME
+    }
+    else {
+        $branch = '(detached)'
+    }
+}
 $fullSha = git rev-parse HEAD
 $shortSha = git rev-parse --short=7 HEAD
 $commitCount = [int](git rev-list HEAD --count)
@@ -292,13 +300,36 @@ $summary = @"
 - validation: validate-release.ps1 PASS
 - packaged updateJson: $($moduleProp['updateJson'])
 
-Generated under ``out/release-prep/`` — not published.
+Generated under ``out/release-prep/`` during release preparation.
 "@
 if ($Tag) {
     $summary += "`n- release tag: $Tag"
 }
 $summaryPath = Join-Path $prepDir 'release-summary.md'
 Set-Content -Path $summaryPath -Value $summary.TrimEnd() -Encoding utf8NoBOM
+
+$releaseNotes = @"
+# Tricky Store OSS $productVersion
+
+Fork release from xStoikk, based on TrickyStoreOSS upstream by beakthoven.
+
+## Release identity
+
+- Version: ``$productVersion``
+- versionCode: ``$packagedVersionCode``
+- Source commit: ``$fullSha``
+- Release ZIP: ``$($releaseZip.Name)``
+- Release ZIP SHA256: ``$releaseSha``
+- classes.dex SHA256: ``$dexSha``
+- TEE build phase: ``$teePhase``
+- Validation: ``validate-release.ps1 PASS``
+
+## Attribution
+
+Tricky Store OSS is based on the upstream TrickyStoreOSS project by beakthoven.
+"@
+$notesPath = Join-Path $prepDir 'release-notes.md'
+Set-Content -Path $notesPath -Value $releaseNotes.TrimEnd() -Encoding utf8NoBOM
 
 if ($Tag) {
     Write-Step 'Candidate update.json.next'
@@ -321,3 +352,4 @@ else {
 Write-Step 'Release preparation complete'
 Write-Host "manifest=$manifestPath"
 Write-Host "summary=$summaryPath"
+Write-Host "notes=$notesPath"
