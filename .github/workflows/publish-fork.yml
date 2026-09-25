@@ -1,0 +1,329 @@
+name: Fork Publish Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing DRAFT release tag to publish
+        required: true
+        type: string
+      expected_release_sha:
+        description: Exact frozen release source SHA from release-manifest.json
+        required: true
+        type: string
+      confirmation:
+        description: 'Type exactly: PUBLISH <tag>'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  attestations: read
+
+concurrency:
+  group: fork-publish-${{ github.repository }}-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  publish-release:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Refuse non-fork or non-main dispatch
+        if: github.repository != 'xStoikk/TrickyStoreOSS' || github.ref != 'refs/heads/main'
+        run: |
+          echo "::error::Fork publish may only run on xStoikk/TrickyStoreOSS refs/heads/main"
+          exit 1
+
+      - name: Validate workflow inputs
+        env:
+          TAG: ${{ inputs.tag }}
+          EXPECTED_RELEASE_SHA: ${{ inputs.expected_release_sha }}
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$TAG" =~ ^v[A-Za-z0-9._-]+$ ]]; then
+            echo "::error::Invalid release tag syntax: $TAG"
+            exit 1
+          fi
+          if [[ ! "$EXPECTED_RELEASE_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::expected_release_sha must be exactly 40 lowercase hexadecimal characters"
+            exit 1
+          fi
+          REQUIRED_CONFIRMATION="PUBLISH $TAG"
+          if [[ "$CONFIRMATION" != "$REQUIRED_CONFIRMATION" ]]; then
+            echo "::error::confirmation must be exactly: $REQUIRED_CONFIRMATION"
+            exit 1
+          fi
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "EXPECTED_RELEASE_SHA=$EXPECTED_RELEASE_SHA" >> "$GITHUB_ENV"
+
+      - name: Check out dispatched main commit
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          ref: ${{ github.sha }}
+
+      - name: Verify checked-out commit SHA
+        run: |
+          set -euo pipefail
+          ACTUAL_SHA=$(git rev-parse HEAD)
+          if [[ "$ACTUAL_SHA" != "$GITHUB_SHA" ]]; then
+            echo "::error::Checked-out SHA $ACTUAL_SHA != dispatched GITHUB_SHA $GITHUB_SHA"
+            exit 1
+          fi
+
+      - name: Require dispatch from current protected main tip
+        run: |
+          set -euo pipefail
+          git fetch origin main --tags
+          ORIGIN_MAIN_SHA=$(git rev-parse origin/main)
+          if [[ "$ORIGIN_MAIN_SHA" != "$GITHUB_SHA" ]]; then
+            echo "::error::Dispatch SHA $GITHUB_SHA is not current protected main tip $ORIGIN_MAIN_SHA"
+            exit 1
+          fi
+          echo "PUBLICATION_MAIN_SHA=$GITHUB_SHA" >> "$GITHUB_ENV"
+
+      - name: Verify clean release checkout
+        run: |
+          set -euo pipefail
+          STATUS=$(git status --porcelain --untracked-files=all)
+          if [[ -n "$STATUS" ]]; then
+            echo "::error::Publication checkout is not clean"
+            printf '%s\n' "$STATUS"
+            exit 1
+          fi
+
+      - name: Inspect draft release metadata
+        id: draft_meta
+        run: |
+          set -euo pipefail
+          RELEASE_JSON=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json tagName,name,isDraft,isPrerelease,targetCommitish,publishedAt,body,assets,url)
+          TAG_NAME=$(echo "$RELEASE_JSON" | jq -r '.tagName')
+          NAME=$(echo "$RELEASE_JSON" | jq -r '.name')
+          IS_DRAFT=$(echo "$RELEASE_JSON" | jq -r '.isDraft')
+          IS_PRERELEASE=$(echo "$RELEASE_JSON" | jq -r '.isPrerelease')
+          TARGET=$(echo "$RELEASE_JSON" | jq -r '.targetCommitish')
+          PUBLISHED_AT=$(echo "$RELEASE_JSON" | jq -r '.publishedAt // empty')
+          URL=$(echo "$RELEASE_JSON" | jq -r '.url')
+
+          if [[ "$TAG_NAME" != "$TAG" ]]; then
+            echo "::error::Draft tagName '$TAG_NAME' != '$TAG'"
+            exit 1
+          fi
+          if [[ "$NAME" != "$TAG" ]]; then
+            echo "::error::Draft name '$NAME' != '$TAG'"
+            exit 1
+          fi
+          if [[ "$IS_DRAFT" != "true" ]]; then
+            echo "::error::Release '$TAG' is not a draft"
+            exit 1
+          fi
+          if [[ -n "$PUBLISHED_AT" && "$PUBLISHED_AT" != "null" ]]; then
+            echo "::error::Draft release already has publishedAt: $PUBLISHED_AT"
+            exit 1
+          fi
+          if [[ "$TARGET" != "$EXPECTED_RELEASE_SHA" ]]; then
+            echo "::error::Draft targetCommitish '$TARGET' != expected_release_sha '$EXPECTED_RELEASE_SHA'"
+            exit 1
+          fi
+
+          echo "release_url=$URL" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$IS_PRERELEASE" >> "$GITHUB_OUTPUT"
+          echo "Draft release verified: tag=$TAG target=$TARGET prerelease=$IS_PRERELEASE url=$URL"
+
+      - name: Snapshot draft fingerprint
+        id: draft_snapshot
+        run: |
+          set -euo pipefail
+          RELEASE_JSON=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json tagName,name,isDraft,isPrerelease,targetCommitish,body,assets)
+          CANONICAL_JSON=$(echo "$RELEASE_JSON" | jq -c '{
+            tagName,
+            name,
+            isDraft,
+            isPrerelease,
+            targetCommitish,
+            body,
+            assets: [.assets[] | {name, digest}] | sort_by(.name)
+          }')
+          printf '%s' "$CANONICAL_JSON" > /tmp/draft-snapshot.json
+          DRAFT_FINGERPRINT=$(printf '%s' "$CANONICAL_JSON" | sha256sum | awk '{print $1}')
+          echo "DRAFT_FINGERPRINT=$DRAFT_FINGERPRINT" >> "$GITHUB_ENV"
+          echo "draft_fingerprint=$DRAFT_FINGERPRINT" >> "$GITHUB_OUTPUT"
+          echo "Draft fingerprint: $DRAFT_FINGERPRINT"
+
+      - name: Require remote tag absent before gate
+        run: |
+          set -euo pipefail
+          set +e
+          git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1
+          RC=$?
+          set -e
+          case "$RC" in
+            0)
+              echo "::error::Remote tag already exists before publication gate: $TAG"
+              exit 1
+              ;;
+            2)
+              echo "Remote tag absent before gate: $TAG"
+              ;;
+            *)
+              echo "::error::Remote tag lookup failed before gate (exit code $RC)"
+              exit 1
+              ;;
+          esac
+
+      - name: Phase 7H pre-publication gate (Draft)
+        run: |
+          set -euo pipefail
+          pwsh ./scripts/verify-fork-release.ps1 \
+            -Tag "$TAG" \
+            -State Draft \
+            -Repository "$GITHUB_REPOSITORY" \
+            -MainRef "$PUBLICATION_MAIN_SHA"
+
+      - name: Revalidate protected main after gate
+        run: |
+          set -euo pipefail
+          git fetch origin main --tags
+          ORIGIN_MAIN_SHA=$(git rev-parse origin/main)
+          if [[ "$ORIGIN_MAIN_SHA" != "$PUBLICATION_MAIN_SHA" ]]; then
+            echo "::error::Protected main moved during verification ($ORIGIN_MAIN_SHA != $PUBLICATION_MAIN_SHA)"
+            exit 1
+          fi
+
+      - name: Revalidate draft snapshot after gate
+        run: |
+          set -euo pipefail
+          RELEASE_JSON=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json tagName,name,isDraft,isPrerelease,targetCommitish,publishedAt,body,assets)
+          IS_DRAFT=$(echo "$RELEASE_JSON" | jq -r '.isDraft')
+          PUBLISHED_AT=$(echo "$RELEASE_JSON" | jq -r '.publishedAt // empty')
+          TARGET=$(echo "$RELEASE_JSON" | jq -r '.targetCommitish')
+          CANONICAL_JSON=$(echo "$RELEASE_JSON" | jq -c '{
+            tagName,
+            name,
+            isDraft,
+            isPrerelease,
+            targetCommitish,
+            body,
+            assets: [.assets[] | {name, digest}] | sort_by(.name)
+          }')
+          POST_GATE_FINGERPRINT=$(printf '%s' "$CANONICAL_JSON" | sha256sum | awk '{print $1}')
+          if [[ "$POST_GATE_FINGERPRINT" != "$DRAFT_FINGERPRINT" ]]; then
+            echo "::error::Draft fingerprint changed during gate ($POST_GATE_FINGERPRINT != $DRAFT_FINGERPRINT)"
+            exit 1
+          fi
+          if [[ "$IS_DRAFT" != "true" ]]; then
+            echo "::error::Draft release is no longer a draft after gate"
+            exit 1
+          fi
+          if [[ -n "$PUBLISHED_AT" && "$PUBLISHED_AT" != "null" ]]; then
+            echo "::error::Draft release gained publishedAt during gate: $PUBLISHED_AT"
+            exit 1
+          fi
+          if [[ "$TARGET" != "$EXPECTED_RELEASE_SHA" ]]; then
+            echo "::error::Draft targetCommitish changed during gate: $TARGET"
+            exit 1
+          fi
+          echo "Draft fingerprint unchanged: $POST_GATE_FINGERPRINT"
+
+      - name: Final remote tag absence check
+        run: |
+          set -euo pipefail
+          set +e
+          git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1
+          RC=$?
+          set -e
+          if [[ "$RC" -ne 2 ]]; then
+            echo "::error::Remote tag must be absent immediately before publication (exit code $RC)"
+            exit 1
+          fi
+
+      - name: Publish draft release
+        run: |
+          set -euo pipefail
+          gh release edit "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --draft=false
+
+      - name: Wait for published release state
+        id: published_state
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 12); do
+            RELEASE_JSON=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft,publishedAt,targetCommitish,url)
+            IS_DRAFT=$(echo "$RELEASE_JSON" | jq -r '.isDraft')
+            PUBLISHED_AT=$(echo "$RELEASE_JSON" | jq -r '.publishedAt // empty')
+            TARGET=$(echo "$RELEASE_JSON" | jq -r '.targetCommitish')
+            URL=$(echo "$RELEASE_JSON" | jq -r '.url')
+
+            if [[ "$IS_DRAFT" == "false" && -n "$PUBLISHED_AT" && "$PUBLISHED_AT" != "null" && "$TARGET" == "$EXPECTED_RELEASE_SHA" ]]; then
+              echo "release_url=$URL" >> "$GITHUB_OUTPUT"
+              echo "Published release confirmed on attempt $attempt"
+              exit 0
+            fi
+            echo "Waiting for published state (attempt $attempt/12)..."
+            sleep 5
+          done
+          echo "::error::Release did not reach published state within 60 seconds"
+          exit 1
+
+      # After publication, verification failures are incidents requiring manual
+      # investigation. Never attempt destructive rollback automatically.
+      - name: Post-publication fetch
+        id: post_fetch
+        run: |
+          set -euo pipefail
+          git fetch origin main --tags
+          CURRENT_MAIN_SHA=$(git rev-parse origin/main)
+          echo "current_main_sha=$CURRENT_MAIN_SHA" >> "$GITHUB_OUTPUT"
+          echo "Current origin/main after publication: $CURRENT_MAIN_SHA"
+          echo "Frozen publication main SHA: $PUBLICATION_MAIN_SHA"
+
+      - name: Phase 7H post-publication gate (Published)
+        run: |
+          set -euo pipefail
+          pwsh ./scripts/verify-fork-release.ps1 \
+            -Tag "$TAG" \
+            -State Published \
+            -Repository "$GITHUB_REPOSITORY" \
+            -MainRef origin/main
+
+      - name: Final source and tag assertion
+        run: |
+          set -euo pipefail
+          TAG_COMMIT=$(git rev-parse "refs/tags/$TAG^{commit}")
+          if [[ "$TAG_COMMIT" != "$EXPECTED_RELEASE_SHA" ]]; then
+            echo "::error::Published tag commit '$TAG_COMMIT' != expected_release_sha '$EXPECTED_RELEASE_SHA'"
+            exit 1
+          fi
+          TARGET=$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json targetCommitish --jq .targetCommitish)
+          if [[ "$TARGET" != "$EXPECTED_RELEASE_SHA" ]]; then
+            echo "::error::Published targetCommitish '$TARGET' != expected_release_sha '$EXPECTED_RELEASE_SHA'"
+            exit 1
+          fi
+          echo "Published tag target verified: $TAG_COMMIT"
+
+      - name: Publication summary
+        run: |
+          set -euo pipefail
+          {
+            echo "# Fork release published"
+            echo
+            echo "- Tag: \`$TAG\`"
+            echo "- Release URL: ${{ steps.published_state.outputs.release_url }}"
+            echo "- Prerelease state: ${{ steps.draft_meta.outputs.prerelease }}"
+            echo "- Frozen release source SHA: \`$EXPECTED_RELEASE_SHA\`"
+            echo "- Publication main SHA: \`$PUBLICATION_MAIN_SHA\`"
+            echo "- Current main SHA after publication: \`${{ steps.post_fetch.outputs.current_main_sha }}\`"
+            echo "- Phase 7H Draft gate: PASS"
+            echo "- Draft fingerprint unchanged: PASS"
+            echo "- Publication transition: PASS"
+            echo "- Phase 7H Published gate: PASS"
+            echo "- Published tag target: \`$EXPECTED_RELEASE_SHA\`"
+            echo
+            echo "PHASE 7I PUBLICATION: PASS"
+          } >> "$GITHUB_STEP_SUMMARY"
