@@ -1,6 +1,6 @@
 {
-  "version": "v3.1.0",
-  "versionCode": 172,
-  "zipUrl": "https://github.com/beakthoven/TrickyStoreOSS/releases/download/v3.1.0/Tricky-Store-OSS-v3.1.0-172-41383f5-Release.zip",
-  "changelog": "https://raw.githubusercontent.com/beakthoven/TrickyStoreOSS/main/changelog.md"
+  "version": "v3.2.0-oss.1",
+  "versionCode": 100198,
+  "zipUrl": "https://github.com/xStoikk/TrickyStoreOSS/releases/download/v3.2.0-oss.1/Tricky-Store-OSS-v3.2.0-oss.1-198-4f3e3e2-Release.zip",
+  "changelog": "https://raw.githubusercontent.com/xStoikk/TrickyStoreOSS/main/changelog.md"
 }
